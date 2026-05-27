@@ -96,3 +96,21 @@ runs:
       with:
         path: ~/.cache/particle/wheels-cffi
         key: cffi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cffi/Makefile', 'cffi/patches-cffi/*') }}
+
+    - name: cache pydantic-core build tree
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/particle/wheels-pydantic-core
+        key: pydantic-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pydantic-core/Makefile') }}
+
+    - name: cache regex build tree
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/particle/wheels-regex
+        key: regex-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('regex/Makefile') }}
+
+    - name: cache pyyaml build tree
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/particle/wheels-pyyaml
+        key: pyyaml-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyyaml/Makefile') }}

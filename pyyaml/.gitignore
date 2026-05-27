@@ -1,0 +1,4 @@
+# Cached upstream tarballs (PyYAML + libyaml) — survives `make clean`.
+.cache/
+# Built wheel.
+out/

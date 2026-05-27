@@ -77,15 +77,17 @@ if [[ -n "$TAG" ]]; then
     sha="${line%% *}"
     fname="${line##* }"
     [[ "$fname" == *.whl ]] || continue
-    pkg="${fname%%-*}"
+    # PEP 503 normalize: lowercase + collapse runs of -/_/. to a
+    # single dash. e.g. `pydantic_core-2.30.0-...whl` → `pydantic-core`.
+    # The filename itself stays as-is — pip looks up by the
+    # normalized name but downloads the raw filename.
+    pkg_raw="${fname%%-*}"
+    pkg=$(printf '%s' "$pkg_raw" | tr '[:upper:]' '[:lower:]' | sed 's/[-_.]\+/-/g')
     printf '%s\t%s\t%s\n' "$pkg" "$fname" "$sha" >> "$ENTRIES"
   done < "$TMP/SHA256SUMS"
 fi
 
-# Unique package list. The first dash-separated field of a wheel
-# filename is already PEP 503 normalized for our packages (cffi,
-# cryptography). If you add a package whose name uses '_' or mixed
-# case, normalize at the `printf "%s\t..."` line above instead.
+# Unique package list (PEP 503 normalized names, from column 1).
 PKGS=$(awk -F'\t' '{print $1}' "$ENTRIES" | sort -u)
 
 # ---- root index.html ----

@@ -1,0 +1,4 @@
+# Cached upstream tarball — survives `make clean`, keyed on version.
+.cache/
+# Built wheel.
+out/

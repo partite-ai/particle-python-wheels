@@ -17,7 +17,7 @@ From a wasi-targeted pip (i.e. running inside a `wasm32-wasip2` CPython):
 ```
 pip install \
   --extra-index-url https://<owner>.github.io/<repo>/simple/ \
-  cffi cryptography
+  cffi cryptography pydantic-core regex pyyaml
 ```
 
 `--extra-index-url` keeps PyPI as the primary source. Our index only
@@ -26,14 +26,24 @@ we ship.
 
 ## Packaged versions
 
-| Package      | Version | Wheel tag                    |
-| ------------ | ------- | ---------------------------- |
-| cffi         | 2.0.0   | `cp314-abi3-wasi_wasm32`     |
-| cryptography | 48.0.0  | `cp314-abi3-wasi_wasm32`     |
+| Package       | Version    | Wheel tag                   |
+| ------------- | ---------- | --------------------------- |
+| cffi          | 2.0.0      | `cp314-abi3-wasi_wasm32`    |
+| cryptography  | 48.0.0     | `cp314-abi3-wasi_wasm32`    |
+| pydantic-core | 2.47.0     | `cp314-abi3-wasi_wasm32`    |
+| regex         | 2026.5.9   | `cp314-cp314-wasi_wasm32`   |
+| PyYAML        | 6.0.3      | `cp314-cp314-wasi_wasm32`   |
 
 Versions are pinned in each subdir's Makefile (`CFFI_VERSION`,
-`CRYPTOGRAPHY_VERSION`). Bump there, push a new `v*` tag, and the
-release workflow rebuilds.
+`CRYPTOGRAPHY_VERSION`, `PYDANTIC_CORE_VERSION`, `REGEX_VERSION`,
+`PYYAML_VERSION`). Bump there, push a new `v*` tag, and the release
+workflow rebuilds.
+
+Note: regex and PyYAML are tagged `cp314-cp314` rather than
+`cp314-abi3` because their C extensions use CPython internals and
+are recompiled per minor version on PyPI. The other three wheels
+use abi3, so they remain installable on a hypothetical future cp315+
+wasi interpreter.
 
 ## Build locally
 
@@ -104,6 +114,19 @@ cffi/            cffi 2.0.0 wheel. Compiled against the wasm CPython
 
 cryptography/    pyca/cryptography 48.0.0 wheel. Pulls in AWS-LC as
                  its OpenSSL replacement; driven by maturin.
+
+pydantic-core/   pydantic-core 2.47.0 wheel. Pure-Rust + PyO3; the
+                 lightest of the wheel builds (no C deps, no host
+                 codegen step).
+
+regex/           regex 2026.5.9 wheel (mrab-regex). Hand-compiled C
+                 extension against the wasm CPython, assembled
+                 directly (no setuptools); pattern closest to cffi.
+
+pyyaml/          PyYAML 6.0.3 wheel. Also cross-builds libyaml 0.2.5
+                 (autotools) and runs Cython on _yaml.pyx → _yaml.c
+                 inline — PyYAML 6.0.3's sdist dropped the
+                 pre-generated .c. Heaviest of the hand-built wheels.
 
 scripts/         build-pages-index.sh — emits the PEP 503 simple/ tree
                  at release time, pointing at the latest Release's

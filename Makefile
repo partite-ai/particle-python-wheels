@@ -8,6 +8,10 @@
 #                    cffi, not a wheel itself).
 #   cffi/            cffi wheel (cp314, wasm32-wasip2).
 #   cryptography/    cryptography wheel (cp314, wasm32-wasip2).
+#   pydantic-core/   pydantic-core wheel (cp314, wasm32-wasip2).
+#   regex/           regex wheel (mrab-regex; cp314, wasm32-wasip2).
+#   pyyaml/          PyYAML wheel + libyaml.a cross-build (cp314,
+#                    wasm32-wasip2).
 #
 # This file:
 #   1. Drives the four sub-builds in dependency order.
@@ -18,7 +22,7 @@
 #
 #   pip install \
 #     --index-url file://$(pwd)/dist/simple/ \
-#     cffi cryptography
+#     cffi cryptography pydantic-core
 #
 # Targets:
 #   make             # equivalent to `make all`
@@ -33,15 +37,18 @@ THIS_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 DIST_DIR  := $(THIS_DIR)dist
 INDEX_DIR := $(DIST_DIR)/simple
 
-CPYTHON_DIR      := $(THIS_DIR)cpython
-LIBFFI_DIR       := $(THIS_DIR)libffi-wasi
-CFFI_DIR         := $(THIS_DIR)cffi
-CRYPTOGRAPHY_DIR := $(THIS_DIR)cryptography
+CPYTHON_DIR       := $(THIS_DIR)cpython
+LIBFFI_DIR        := $(THIS_DIR)libffi-wasi
+CFFI_DIR          := $(THIS_DIR)cffi
+CRYPTOGRAPHY_DIR  := $(THIS_DIR)cryptography
+PYDANTIC_CORE_DIR := $(THIS_DIR)pydantic-core
+REGEX_DIR         := $(THIS_DIR)regex
+PYYAML_DIR        := $(THIS_DIR)pyyaml
 
 # ---- top-level entry points ---------------------------------------------
 
 .PHONY: all wheels index clean \
-        cpython libffi-wasi cffi cryptography
+        cpython libffi-wasi cffi cryptography pydantic-core regex pyyaml
 
 all: index
 
@@ -63,6 +70,22 @@ cffi: cpython libffi-wasi
 cryptography: cpython
 	$(MAKE) -C $(CRYPTOGRAPHY_DIR)
 
+# pydantic-core is pure Rust + PyO3 against the wasm CPython — no C deps,
+# no host-python codegen.
+pydantic-core: cpython
+	$(MAKE) -C $(PYDANTIC_CORE_DIR)
+
+# regex is a hand-compiled C extension against the wasm CPython —
+# closest in shape to cffi (no setuptools, manual wheel assembly).
+regex: cpython
+	$(MAKE) -C $(REGEX_DIR)
+
+# pyyaml builds libyaml.a (autotools, cross-compiled), runs Cython on
+# _yaml.pyx, then compiles + links the resulting _yaml.c — heaviest of
+# the hand-built wheels.
+pyyaml: cpython
+	$(MAKE) -C $(PYYAML_DIR)
+
 # ---- wheel collection ---------------------------------------------------
 #
 # Each subdir drops its wheel into <subdir>/out/. Copy whatever lands
@@ -71,9 +94,12 @@ cryptography: cpython
 
 wheels: $(DIST_DIR)/.collected
 
-$(DIST_DIR)/.collected: cffi cryptography | $(DIST_DIR)
+$(DIST_DIR)/.collected: cffi cryptography pydantic-core regex pyyaml | $(DIST_DIR)
 	cp $(CFFI_DIR)/out/*.whl $(DIST_DIR)/
 	cp $(CRYPTOGRAPHY_DIR)/out/*.whl $(DIST_DIR)/
+	cp $(PYDANTIC_CORE_DIR)/out/*.whl $(DIST_DIR)/
+	cp $(REGEX_DIR)/out/*.whl $(DIST_DIR)/
+	cp $(PYYAML_DIR)/out/*.whl $(DIST_DIR)/
 	cd $(DIST_DIR) && sha256sum *.whl > SHA256SUMS
 	@touch $@
 	@echo "✓  wheels in $(DIST_DIR)/:"
@@ -137,3 +163,6 @@ clean:
 	-$(MAKE) -C $(LIBFFI_DIR) clean
 	-$(MAKE) -C $(CFFI_DIR) clean
 	-$(MAKE) -C $(CRYPTOGRAPHY_DIR) clean
+	-$(MAKE) -C $(PYDANTIC_CORE_DIR) clean
+	-$(MAKE) -C $(REGEX_DIR) clean
+	-$(MAKE) -C $(PYYAML_DIR) clean

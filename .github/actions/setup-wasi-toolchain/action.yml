@@ -23,7 +23,7 @@ runs:
   steps:
     - name: cache wasi-sdk
       id: cache-wasi-sdk
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /opt/wasi-sdk
         key: wasi-sdk-30-${{ runner.os }}-${{ runner.arch }}
@@ -61,7 +61,7 @@ runs:
         targets: wasm32-wasip2
 
     - name: cache cargo registries
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cargo/registry
@@ -78,7 +78,7 @@ runs:
     # versions/refs hard-coded in the child Makefiles so a Makefile bump
     # invalidates the relevant cache. Misses just mean a slow first run.
     - name: cache cpython build tree
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cache/particle/cpython-build
@@ -86,31 +86,31 @@ runs:
         key: cpython-0e13686da-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cpython/Makefile') }}
 
     - name: cache cryptography build tree
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/particle/wheels-cryptography
         key: cryptography-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cryptography/Makefile', 'cryptography/patches-aws-lc/*', 'cryptography/patches-cryptography/*') }}
 
     - name: cache cffi build tree
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/particle/wheels-cffi
         key: cffi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cffi/Makefile', 'cffi/patches-cffi/*') }}
 
     - name: cache pydantic-core build tree
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/particle/wheels-pydantic-core
         key: pydantic-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pydantic-core/Makefile') }}
 
     - name: cache regex build tree
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/particle/wheels-regex
         key: regex-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('regex/Makefile') }}
 
     - name: cache pyyaml build tree
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ~/.cache/particle/wheels-pyyaml
         key: pyyaml-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyyaml/Makefile') }}

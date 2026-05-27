@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
@@ -75,7 +75,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -103,7 +103,7 @@ jobs:
 
   pages:
     needs: release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

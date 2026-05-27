@@ -1,0 +1,32 @@
+Subject: cryptography-cffi: honor WASM_PYTHON_INCLUDE override
+
+When cross-compiling for wasm32-wasip2 we need the *target* CPython
+headers, not the host venv's. The host venv's Python.h has
+LONG_BIT=64 (linux-aarch64-gnu) and pyport.h's LONG_BIT sanity check
+trips when clang is targeting wasm32 (where SIZEOF_LONG=4).
+
+Adds a small escape hatch: if the WASM_PYTHON_INCLUDE env var is set
+and non-empty, it replaces the auto-detected python_includes
+wholesale. The Makefile points it at $CPYTHON_WASI_DIR/install/include/python3.14.
+
+--- a/src/rust/cryptography-cffi/build.rs
++++ b/src/rust/cryptography-cffi/build.rs
+@@ -66,6 +66,18 @@ fn main() {
+          print(os.pathsep.join(b.include_dirs), end='')",
+     )
+     .unwrap();
++    let python_includes = match std::env::var("WASM_PYTHON_INCLUDE") {
++        Ok(v) if !v.is_empty() => {
++            // wheels/cryptography override: when cross-compiling we need
++            // the target Python headers, not the host venv's. The host
++            // venv's Python.h has LONG_BIT=64 for linux-aarch64-gnu;
++            // wasm32-wasip2 is 32-bit, which trips pyport.h's LONG_BIT
++            // sanity check. Honoring WASM_PYTHON_INCLUDE lets the Makefile
++            // point us at the wasm CPython's include dir.
++            v
++        }
++        _ => python_includes,
++    };
+     let openssl_c = Path::new(&out_dir).join("_openssl.c");
+
+     let mut build = cc::Build::new();

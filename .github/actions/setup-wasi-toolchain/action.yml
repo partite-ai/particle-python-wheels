@@ -1,0 +1,98 @@
+# Shared cross-toolchain bootstrap for the wheel builds.
+# Mirrors what .devcontainer/Dockerfile installs so a green CI run
+# implies the local dev container also works.
+#
+# Installs:
+#   - WASI SDK 30 to /opt/wasi-sdk (matches dev container's pin)
+#   - Rust stable with the wasm32-wasip2 target
+#   - uv (Astral's Python manager — cryptography's Makefile uses it to
+#     provision a host CPython 3.14 venv with cffi + setuptools)
+#
+# Caches:
+#   - /opt/wasi-sdk        keyed on WASI_SDK_VERSION
+#   - ~/.cargo, ~/.rustup  default Rust cache
+#   - ~/.cache/particle    tarballs + cpython/aws-lc build trees
+#   - ~/cargo-target       cpython cross-build output (shared with
+#                          repo root's `make python-lib` convention)
+
+name: setup-wasi-toolchain
+description: Install wasi-sdk + Rust wasm32-wasip2 + uv
+
+runs:
+  using: composite
+  steps:
+    - name: cache wasi-sdk
+      id: cache-wasi-sdk
+      uses: actions/cache@v4
+      with:
+        path: /opt/wasi-sdk
+        key: wasi-sdk-30-${{ runner.os }}-${{ runner.arch }}
+
+    - name: install wasi-sdk
+      if: steps.cache-wasi-sdk.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        # sha256 of each per-arch tarball, pinned to defend against a
+        # re-pushed release replacing the binary under the same tag.
+        # Refresh on version bump via the release's asset metadata:
+        #   curl -fsSL https://api.github.com/repos/WebAssembly/wasi-sdk/releases/tags/wasi-sdk-30 \
+        #     | jq -r '.assets[] | select(.name|endswith("-linux.tar.gz")) | "\(.name) \(.digest)"'
+        case "$(uname -m)" in
+          x86_64)  arch=x86_64; sha256=0507679dff16814b74516cd969a9b16d2ced1347388024bc7966264648c78bfb ;;
+          aarch64) arch=arm64;  sha256=6f2977942308d91b0123978da3c6a0d6fce780994b3b020008c617e26764ea40 ;;
+          *) echo "unsupported arch $(uname -m)"; exit 1 ;;
+        esac
+        curl -fsSL -o /tmp/wasi-sdk.tar.gz \
+          "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-${arch}-linux.tar.gz"
+        echo "${sha256}  /tmp/wasi-sdk.tar.gz" | sha256sum -c -
+        sudo mkdir -p /opt
+        sudo tar -xzf /tmp/wasi-sdk.tar.gz -C /opt
+        sudo mv "/opt/wasi-sdk-30.0-${arch}-linux" /opt/wasi-sdk
+        rm /tmp/wasi-sdk.tar.gz
+
+    - name: export WASI_SDK_PATH
+      shell: bash
+      run: echo "WASI_SDK_PATH=/opt/wasi-sdk" >> "$GITHUB_ENV"
+
+    - name: install rust + wasm32-wasip2
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-wasip2
+
+    - name: cache cargo registries
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: cargo-${{ runner.os }}-${{ hashFiles('cryptography/Makefile') }}
+
+    - name: install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        # Pre-warm the 3.14 interpreter cryptography's host venv needs.
+        python-version: "3.14"
+
+    # Persistent caches for the heavy sub-builds. Keys are pinned to the
+    # versions/refs hard-coded in the child Makefiles so a Makefile bump
+    # invalidates the relevant cache. Misses just mean a slow first run.
+    - name: cache cpython build tree
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/particle/cpython-build
+          ~/cargo-target/cpython-0e13686da8bb881b059d35e23c32bcd2e6440099
+        key: cpython-0e13686da-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cpython/Makefile') }}
+
+    - name: cache cryptography build tree
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/particle/wheels-cryptography
+        key: cryptography-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cryptography/Makefile', 'cryptography/patches-aws-lc/*', 'cryptography/patches-cryptography/*') }}
+
+    - name: cache cffi build tree
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/particle/wheels-cffi
+        key: cffi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cffi/Makefile', 'cffi/patches-cffi/*') }}

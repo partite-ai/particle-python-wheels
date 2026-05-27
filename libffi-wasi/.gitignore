@@ -1,0 +1,4 @@
+# Compiled .o files for libffi.a.
+build/
+# Built libffi.a + assembled include dir.
+out/

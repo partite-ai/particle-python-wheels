@@ -1,0 +1,29 @@
+Subject: ssl: guard the local iovec redefinition on wasi
+
+bio_ssl.cc intentionally redefines `struct iovec` locally to avoid
+having to include <sys/socket.h> via bio.h on consumers. On wasi
+targets wasi-libc's __struct_iovec.h is already pulled in through the
+headers openssl/ssl.h transitively includes, so the local definition
+becomes a genuine redefinition error.
+
+Skip the local definition when __wasi__ is set — the system
+definition's layout (void *iov_base, size_t iov_len) is identical to
+the one AWS-LC declares here.
+
+--- a/ssl/bio_ssl.cc
++++ b/ssl/bio_ssl.cc
+@@ -14,10 +14,14 @@
+ // implement such checks, making this approach necessary for compatibility.
+ //
+ // See commit aws-lc@9db959e for more details.
++#if defined(__wasi__)
++// wasi-libc already provides struct iovec via <__struct_iovec.h>.
++#else
+ struct iovec {
+   void* iov_base;
+   size_t iov_len;
+ };
++#endif
+
+ static SSL *get_ssl(BIO *bio) {
+   return reinterpret_cast<SSL *>(bio->ptr);

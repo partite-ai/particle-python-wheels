@@ -1,0 +1,6 @@
+# Root-level Makefile outputs.
+# `make wheels` collects wheels here; `make index` writes ./dist/simple/.
+dist/
+
+# Pages publish staging emitted by scripts/build-pages-index.sh.
+_site/

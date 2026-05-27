@@ -1,0 +1,4 @@
+# Cached upstream cffi sdist tarball — survives `make clean`.
+.cache/
+# Built wheel.
+out/

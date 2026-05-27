@@ -1,0 +1,140 @@
+# Release pipeline — runs on every `v*` tag.
+#
+#   1. build:    cross-build the wheels (same setup as build.yml).
+#   2. release:  create a GitHub Release for the tag and upload the
+#                wheels + SHA256SUMS as assets.
+#   3. pages:    regenerate the PEP 503 simple/ index across all
+#                v* releases (not just this one — older versions
+#                stay installable) and deploy it to GitHub Pages.
+#
+# After a successful run, the index lives at:
+#
+#   https://<owner>.github.io/<repo>/simple/
+#
+# and consumers can pip-install with:
+#
+#   pip install \
+#     --extra-index-url https://<owner>.github.io/<repo>/simple/ \
+#     cffi cryptography
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)release"
+        required: true
+
+permissions:
+  contents: write   # gh release create + upload
+  pages: write
+  id-token: write   # actions/deploy-pages OIDC
+
+concurrency:
+  group: release-pages
+  cancel-in-progress: false   # never interrupt a Pages deploy mid-flight
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: resolve tag
+        id: resolve
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: ./.github/actions/setup-wasi-toolchain
+
+      - name: build wheels
+        run: make wheels
+
+      - name: show dist/
+        run: |
+          ls -lh dist/
+          cat dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # `gh release create` errors if the release already exists,
+          # so we check first and upload-only in the re-release path.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists — uploading (clobbering)"
+            gh release upload "$TAG" dist/*.whl dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/*.whl dist/SHA256SUMS \
+              --title "$TAG" \
+              --generate-notes
+          fi
+
+  pages:
+    needs: release
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: regenerate simple/ index across all releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          OUT_DIR: _site/simple
+        run: |
+          set -euo pipefail
+          bash scripts/build-pages-index.sh
+
+      - name: add a tiny landing page
+        # Convenience only — pip never reads this; humans hitting the
+        # bare gh-pages URL get a one-line pointer instead of a 404.
+        run: |
+          cat > _site/index.html <<HTML
+          <!DOCTYPE html>
+          <html><body>
+          <h1>WASI Python wheel index</h1>
+          <p>PEP 503 simple index: <a href="simple/">simple/</a></p>
+          <pre>pip install --extra-index-url https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/simple/ cffi cryptography</pre>
+          </body></html>
+          HTML
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,46 @@
+# CI gate: build wheels on every push to main and every PR.
+# Does not publish — the dist/ tree is uploaded as a workflow artifact
+# so you can download + sanity-check it. The release.yml workflow is
+# the one that pushes to GitHub Releases + Pages.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel an in-flight build if a new commit lands on the same ref —
+# the cross-build takes ~20 min, no point finishing a stale one.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wheels:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reusable setup — kept identical to release.yml so a green CI
+      # build implies the release path will also work.
+      - uses: ./.github/actions/setup-wasi-toolchain
+
+      - name: build wheels
+        run: make wheels
+
+      - name: show dist/
+        run: |
+          ls -lh dist/
+          cat dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ github.sha }}
+          path: |
+            dist/*.whl
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14

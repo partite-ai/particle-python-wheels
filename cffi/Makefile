@@ -106,7 +106,12 @@ $(TARBALL):
 	curl -sL -o $@ $(CFFI_TARBALL)
 	@ls -la $@
 
-$(SRC_DIR)/setup.py: $(TARBALL)
+# Order-only on the tarball: when $(SRC_DIR) is restored from the
+# cffi cache, we don't want a missing tarball (in the in-tree,
+# uncached .cache/) to drag us through re-download + re-extract,
+# which would also `rm -rf` the cached source — wiping the patched
+# tree and forcing a downstream _cffi_backend.so rebuild.
+$(SRC_DIR)/setup.py: | $(TARBALL)
 	@mkdir -p $(WORKDIR)
 	@rm -rf $(SRC_DIR)
 	tar xzf $< -C $(WORKDIR)

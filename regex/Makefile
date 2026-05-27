@@ -86,7 +86,10 @@ $(TARBALL):
 	curl -fsSL -o $@.tmp $(REGEX_TARBALL_URL)
 	mv $@.tmp $@
 
-$(SRC_DIR)/setup.py: $(TARBALL)
+# Order-only on the tarball — see cffi/Makefile for the rationale.
+# Cached $(SRC_DIR) should not be wiped + re-extracted just because
+# the in-tree tarball didn't survive the CI runner.
+$(SRC_DIR)/setup.py: | $(TARBALL)
 	@mkdir -p $(WORKDIR)
 	@rm -rf $(SRC_DIR)
 	tar xzf $< -C $(WORKDIR)

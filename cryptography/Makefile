@@ -183,7 +183,10 @@ $(CMAKE_TARBALL): | check-host-deps
 	curl -fsSL -o $@.tmp $(CMAKE_TARBALL_URL)
 	mv $@.tmp $@
 
-$(CMAKE): $(CMAKE_TARBALL)
+# Order-only on the tarball: when $(CMAKE) is restored from cache, we
+# don't want a missing tarball (which lives in the in-tree, uncached
+# .cache/) to drag us back through download + re-extract.
+$(CMAKE): | $(CMAKE_TARBALL)
 	@mkdir -p $(TOOLCHAIN_BIN)
 	@# Strip leading cmake-X.Y.Z-arch/ so the contents land in TOOLCHAIN_DIR.
 	tar -xzf $(CMAKE_TARBALL) -C $(TOOLCHAIN_DIR) --strip-components=1
@@ -219,7 +222,9 @@ $(AWS_LC_SRC)/CMakeLists.txt: $(AWS_LC_TARBALL) $(wildcard $(THIS_DIR)patches-aw
 # find_package / try_compile work cross-compiled. The DISABLE_* flags
 # below skip subprojects that need a host Perl/Go (which we have
 # neither in the sandbox nor want as dependencies).
-$(AWS_LC_LIBCRYPTO): $(AWS_LC_SRC)/CMakeLists.txt $(CMAKE)
+# Order-only prereqs: when libcrypto.a is restored from cache we don't
+# need to re-extract AWS-LC sources or re-run CMake.
+$(AWS_LC_LIBCRYPTO): | $(AWS_LC_SRC)/CMakeLists.txt $(CMAKE)
 	@mkdir -p $(AWS_LC_BUILD) $(AWS_LC_PREFIX)
 	cd $(AWS_LC_BUILD) && $(CMAKE) $(AWS_LC_SRC) \
 	    -DCMAKE_TOOLCHAIN_FILE=$(WASI_SDK_PATH)/share/cmake/wasi-sdk-p2.cmake \

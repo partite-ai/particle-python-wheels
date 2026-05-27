@@ -120,13 +120,16 @@ $(LIBYAML_TARBALL): | check-host-deps
 	curl -fsSL -o $@.tmp $(LIBYAML_TARBALL_URL)
 	mv $@.tmp $@
 
-$(PYYAML_SRC)/setup.py: $(PYYAML_TARBALL)
+# Order-only tarball prereqs — see cffi/Makefile for the rationale.
+# Cached source trees should not be wiped + re-extracted just because
+# the in-tree tarballs didn't survive the CI runner.
+$(PYYAML_SRC)/setup.py: | $(PYYAML_TARBALL)
 	@mkdir -p $(WORKDIR)
 	rm -rf $(PYYAML_SRC)
 	tar -xzf $< -C $(WORKDIR)
 	@touch $@
 
-$(LIBYAML_SRC)/configure: $(LIBYAML_TARBALL)
+$(LIBYAML_SRC)/configure: | $(LIBYAML_TARBALL)
 	@mkdir -p $(WORKDIR)
 	rm -rf $(LIBYAML_SRC)
 	tar -xzf $< -C $(WORKDIR)

@@ -126,13 +126,13 @@ $(LIBYAML_TARBALL): | check-host-deps
 $(PYYAML_SRC)/setup.py: | $(PYYAML_TARBALL)
 	@mkdir -p $(WORKDIR)
 	rm -rf $(PYYAML_SRC)
-	tar -xzf $< -C $(WORKDIR)
+	tar -xzf $(PYYAML_TARBALL) -C $(WORKDIR)
 	@touch $@
 
 $(LIBYAML_SRC)/configure: | $(LIBYAML_TARBALL)
 	@mkdir -p $(WORKDIR)
 	rm -rf $(LIBYAML_SRC)
-	tar -xzf $< -C $(WORKDIR)
+	tar -xzf $(LIBYAML_TARBALL) -C $(WORKDIR)
 	@touch $@
 
 # ---- libyaml cross-build -------------------------------------------------

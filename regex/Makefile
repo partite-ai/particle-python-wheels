@@ -92,7 +92,7 @@ $(TARBALL):
 $(SRC_DIR)/setup.py: | $(TARBALL)
 	@mkdir -p $(WORKDIR)
 	@rm -rf $(SRC_DIR)
-	tar xzf $< -C $(WORKDIR)
+	tar xzf $(TARBALL) -C $(WORKDIR)
 	@touch $@
 
 # ---- compile + link the .so ----

@@ -163,17 +163,16 @@ $(MATURIN): | check-host-deps
 	cargo install --root $(TOOLCHAIN_DIR) --locked maturin@$(MATURIN_VERSION)
 
 # Same pattern for bindgen-cli; openssl-sys's AWS-LC binding-gen path
-# shells out to a `bindgen` binary at build time. After install we
-# rename the real binary to `bindgen-real` and drop a shell shim in
-# its place that appends --sysroot=$(WASI_SYSROOT) to every call. The
-# shim is what makes libclang resolve <stdint.h> against wasi-libc
-# instead of falling back to host /usr/include — see
-# bindgen-wasm-wrapper.sh's header for the why.
-$(BINDGEN): bindgen-wasm-wrapper.sh | check-host-deps
+# shells out to a `bindgen` binary at build time. We point it at the
+# right sysroot via the BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2 env
+# var (set on the maturin invocation below) — that env var propagates
+# through cargo → openssl-sys's build script → bindgen, and bindgen
+# appends its value to the clang invocation, which is exactly what
+# makes libclang resolve <stdint.h> against wasi-libc instead of
+# falling back to the host's /usr/include.
+$(BINDGEN): | check-host-deps
 	@mkdir -p $(TOOLCHAIN_DIR)
 	cargo install --root $(TOOLCHAIN_DIR) --locked bindgen-cli@$(BINDGEN_VERSION)
-	mv $@ $@-real
-	install -m 0755 bindgen-wasm-wrapper.sh $@
 
 # CMake binary release from Kitware. The tarball ships a portable
 # self-contained tree; we extract directly into .toolchain/ so the
@@ -287,6 +286,7 @@ $(WHEEL_OUT): $(BUILD_DIR)/.patched $(AWS_LC_LIBCRYPTO) $(MATURIN) $(BINDGEN) $(
 	  OPENSSL_INCLUDE_DIR=$(AWS_LC_PREFIX)/include \
 	  OPENSSL_STATIC=1 \
 	  WASI_SYSROOT=$(WASI_SYSROOT) \
+	  BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2='--sysroot=$(WASI_SYSROOT)' \
 	  RUSTFLAGS='-C relocation-model=pic -C link-self-contained=no -C link-arg=-Wl,--no-entry -C link-arg=-Wl,--unresolved-symbols=import-dynamic -C link-arg=-Wl,--allow-undefined -C link-arg=-L$(WASI_SYSROOT_SHARED) -C link-arg=-Wl,-l:libc.so' \
 	  CARGO_INCREMENTAL=0 \
 	  CARGO_BUILD_TARGET=wasm32-wasip2 \

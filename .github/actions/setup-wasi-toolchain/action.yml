@@ -97,20 +97,15 @@ runs:
           libffi-wasi/build
         key: libffi-wasi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('libffi-wasi/Makefile', 'libffi-wasi/src/*', 'libffi-wasi/include/*', 'libffi-wasi/patches/*') }}
 
-    # Cache the toolchain bootstrap (cargo-installed maturin + cmake +
-    # bindgen + host pyvenv — heavy to set up, stable across runs) and
-    # the AWS-LC install dir (heavy CMake build). Deliberately omit
-    # build/src/ (re-extracted from cached tarballs each run) and the
-    # cargo target/ that lives inside it — restoring cargo target dirs
-    # from tar has caused hangs at random crates ("Compiling
-    # cryptography-keepalive" was the symptom) because mtime/fingerprint
-    # state can't fully round-trip through cache save/restore.
+    # Cache the full cryptography build tree. The cargo target dir
+    # inside (build/src/cryptography-*/src/rust/target) is explicitly
+    # wiped in the post-restore step below — restoring it caused
+    # cargo's bindgen-cli wrapper recipe to corrupt itself on cached
+    # runs, surfacing as a "Compiling cryptography-keepalive" hang.
     - name: cache cryptography build tree
       uses: actions/cache@v5
       with:
-        path: |
-          ~/.cache/particle/wheels-cryptography/toolchain
-          ~/.cache/particle/wheels-cryptography/build/aws-lc-install
+        path: ~/.cache/particle/wheels-cryptography
         key: cryptography-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cryptography/Makefile', 'cryptography/patches-aws-lc/*', 'cryptography/patches-cryptography/*') }}
 
     - name: cache cffi build tree
@@ -119,14 +114,28 @@ runs:
         path: ~/.cache/particle/wheels-cffi
         key: cffi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cffi/Makefile', 'cffi/patches-cffi/*') }}
 
-    # Same logic as the cryptography cache: keep the toolchain (maturin
-    # + host pyvenv with `wheel`), drop the cargo target dir that
-    # otherwise causes restore-side hangs.
+    # Cache the full pydantic-core build tree. Cargo target dir is
+    # wiped post-restore (see step below), same rationale as
+    # cryptography.
     - name: cache pydantic-core build tree
       uses: actions/cache@v5
       with:
-        path: ~/.cache/particle/wheels-pydantic-core/toolchain
+        path: ~/.cache/particle/wheels-pydantic-core
         key: pydantic-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pydantic-core/Makefile') }}
+
+    # After all caches restore: wipe the cargo target dirs that lived
+    # inside the wheel build trees. Cargo target dirs don't round-trip
+    # cleanly through tar (mtime, .cargo-lock, fingerprint state), and
+    # the failure mode is silent — cargo schedules work against
+    # half-valid intermediates and either rebuilds noisily or hangs.
+    # Re-running cargo from scratch against the cached ~/.cargo
+    # registry takes ~3 min for cryptography, ~1 min for pydantic-core.
+    - name: wipe stale cargo target dirs from restored caches
+      shell: bash
+      run: |
+        set -eux
+        rm -rf ~/.cache/particle/wheels-cryptography/build/src/cryptography-*/src/rust/target || true
+        rm -rf ~/.cache/particle/wheels-pydantic-core/build/src/pydantic_core-*/target || true
 
     - name: cache regex build tree
       uses: actions/cache@v5

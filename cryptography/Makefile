@@ -283,6 +283,7 @@ $(WHEEL_OUT): $(BUILD_DIR)/.patched $(AWS_LC_LIBCRYPTO) $(MATURIN) $(BINDGEN) $(
 	  OPENSSL_STATIC=1 \
 	  WASI_SYSROOT=$(WASI_SYSROOT) \
 	  RUSTFLAGS='-C relocation-model=pic -C link-self-contained=no -C link-arg=-Wl,--no-entry -C link-arg=-Wl,--unresolved-symbols=import-dynamic -C link-arg=-Wl,--allow-undefined -C link-arg=-L$(WASI_SYSROOT_SHARED) -C link-arg=-Wl,-l:libc.so' \
+	  CARGO_INCREMENTAL=0 \
 	  CARGO_BUILD_TARGET=wasm32-wasip2 \
 	  CC=$(WASI_SDK_PATH)/bin/clang \
 	  AR=$(WASI_SDK_PATH)/bin/ar \

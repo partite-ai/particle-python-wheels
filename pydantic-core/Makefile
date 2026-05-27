@@ -122,6 +122,7 @@ $(WHEEL_OUT): $(PYDANTIC_CORE_SRC)/pyproject.toml $(MATURIN) $(HOST_PYTHON) $(PY
 	  PYO3_PYTHON=$(HOST_PYTHON) \
 	  WASI_SYSROOT=$(WASI_SYSROOT) \
 	  RUSTFLAGS='-C relocation-model=pic -C link-self-contained=no -C link-arg=-Wl,--no-entry -C link-arg=-Wl,--unresolved-symbols=import-dynamic -C link-arg=-Wl,--allow-undefined -C link-arg=-L$(WASI_SYSROOT_SHARED) -C link-arg=-Wl,-l:libc.so' \
+	  CARGO_INCREMENTAL=0 \
 	  CARGO_BUILD_TARGET=wasm32-wasip2 \
 	  CC=$(WASI_SDK_PATH)/bin/clang \
 	  AR=$(WASI_SDK_PATH)/bin/ar \

@@ -22,7 +22,7 @@ jobs:
   wheels:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
       # Reusable setup — kept identical to release.yml so a green CI
       # build implies the release path will also work.
@@ -36,7 +36,7 @@ jobs:
           ls -lh dist/
           cat dist/SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: wheels-${{ github.sha }}
           path: |

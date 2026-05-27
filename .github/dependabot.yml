@@ -1,0 +1,26 @@
+# Dependabot config — keeps SHA-pinned actions honest.
+#
+# Workflows + composite actions in this repo pin every external `uses:`
+# to a full commit SHA, with the human-readable version in a trailing
+# comment (`# v4.3.1`). Dependabot reads those comments to detect new
+# releases and opens PRs that bump both the SHA and the comment.
+#
+# Without this, the SHA pins silently rot: a security fix lands in
+# (say) `actions/checkout@v4.3.2` and our workflows keep running v4.3.1
+# until someone notices.
+#
+# All action updates are grouped into a single weekly PR — the wheel
+# builds don't run on PRs from forked repos for security reasons, so
+# this PR doesn't exercise CI cost much, and one consolidated PR is
+# easier to review than nine individual ones.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"

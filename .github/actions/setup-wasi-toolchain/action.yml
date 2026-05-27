@@ -23,7 +23,7 @@ runs:
   steps:
     - name: cache wasi-sdk
       id: cache-wasi-sdk
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: /opt/wasi-sdk
         key: wasi-sdk-30-${{ runner.os }}-${{ runner.arch }}
@@ -56,12 +56,14 @@ runs:
       run: echo "WASI_SDK_PATH=/opt/wasi-sdk" >> "$GITHUB_ENV"
 
     - name: install rust + wasm32-wasip2
-      uses: dtolnay/rust-toolchain@stable
+      # SHA-pinned per supply-chain hardening (refresh by re-resolving
+      # the `stable` branch HEAD).
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
       with:
         targets: wasm32-wasip2
 
     - name: cache cargo registries
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: |
           ~/.cargo/registry
@@ -69,7 +71,7 @@ runs:
         key: cargo-${{ runner.os }}-${{ hashFiles('cryptography/Makefile') }}
 
     - name: install uv
-      uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
       with:
         # Pre-warm the 3.14 interpreter cryptography's host venv needs.
         python-version: "3.14"
@@ -78,7 +80,7 @@ runs:
     # versions/refs hard-coded in the child Makefiles so a Makefile bump
     # invalidates the relevant cache. Misses just mean a slow first run.
     - name: cache cpython build tree
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: |
           ~/.cache/particle/cpython-build
@@ -90,7 +92,7 @@ runs:
     # _cffi_backend.so relinks every run because LIBFFI_LIB gets a
     # fresh mtime each time we rebuild the static archive.
     - name: cache libffi-wasi build outputs
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: |
           libffi-wasi/out
@@ -103,13 +105,13 @@ runs:
     # cargo's bindgen-cli wrapper recipe to corrupt itself on cached
     # runs, surfacing as a "Compiling cryptography-keepalive" hang.
     - name: cache cryptography build tree
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: ~/.cache/particle/wheels-cryptography
         key: cryptography-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cryptography/Makefile', 'cryptography/patches-aws-lc/*', 'cryptography/patches-cryptography/*') }}
 
     - name: cache cffi build tree
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: ~/.cache/particle/wheels-cffi
         key: cffi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cffi/Makefile', 'cffi/patches-cffi/*') }}
@@ -118,7 +120,7 @@ runs:
     # wiped post-restore (see step below), same rationale as
     # cryptography.
     - name: cache pydantic-core build tree
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: ~/.cache/particle/wheels-pydantic-core
         key: pydantic-core-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pydantic-core/Makefile') }}
@@ -138,13 +140,13 @@ runs:
         rm -rf ~/.cache/particle/wheels-pydantic-core/build/src/pydantic_core-*/target || true
 
     - name: cache regex build tree
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: ~/.cache/particle/wheels-regex
         key: regex-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('regex/Makefile') }}
 
     - name: cache pyyaml build tree
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: ~/.cache/particle/wheels-pyyaml
         key: pyyaml-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pyyaml/Makefile') }}

@@ -1,0 +1,7 @@
+package wasi:http@0.2.0;
+world http-client {
+  import outgoing-handler;
+  import types;
+  import wasi:io/streams@0.2.0;
+  import wasi:io/poll@0.2.0;
+}

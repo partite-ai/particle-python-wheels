@@ -10,11 +10,11 @@
 # Builds skip setuptools cross-compile (fragile) — we invoke clang
 # ourselves, then assemble the wheel zip by hand.
 #
-#   make            # build out/cffi-2.0.0-cp314-abi3-any.whl
+#   make            # build out/cffi-2.0.0-cp314-abi3-wasi_wasm32.whl
 #   make clean      # drop sources, archives, output
 #
 # Outputs:
-#   out/cffi-2.0.0-cp314-abi3-any.whl
+#   out/cffi-2.0.0-cp314-abi3-wasi_wasm32.whl
 
 THIS_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 

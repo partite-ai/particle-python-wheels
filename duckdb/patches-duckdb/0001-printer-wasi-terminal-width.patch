@@ -1,0 +1,14 @@
+--- a/src/common/printer.cpp
++++ b/src/common/printer.cpp
+@@ -72,6 +72,11 @@
+ 	GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi);
+ 	rows = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+ 	return rows;
++#elif defined(__wasi__)
++	// wasi has no controlling terminal and wasi-libc's <sys/ioctl.h>
++	// defines neither struct winsize nor TIOCGWINSZ. Assume a standard
++	// 80-column width.
++	return 80;
+ #else
+ 	struct winsize w;
+ 	ioctl(0, TIOCGWINSZ, &w);

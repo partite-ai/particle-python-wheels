@@ -1,0 +1,30 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -3,16 +3,23 @@
+     s3fs.cpp
+     httpfs.cpp
+     http_state.cpp
+-    crypto.cpp
+     hash_functions.cpp
+     create_secret_functions.cpp
+     httpfs_extension.cpp
+     s3_multi_part_upload.cpp)
+-if(NOT EMSCRIPTEN)
++if(EMSCRIPTEN)
++  set(HTTPFS_SOURCES ${HTTPFS_SOURCES} crypto.cpp httpfs_client_wasm.cpp)
++elseif(CMAKE_SYSTEM_NAME STREQUAL "WASI")
++  # wasi: the stub HTTPFSUtil (as emscripten) + our wasi:http transport and
++  # the vendored wit-bindgen bindings. No curl/httplib. crypto.cpp is
++  # EXCLUDED — it's the openssl AES-GCM (encrypted-files) path, used only
++  # under OVERRIDE_ENCRYPTION_UTILS (off on wasi). S3-signing hashing comes
++  # from hash_functions.cpp (core's mbedtls), so the module needs no openssl.
++  set(HTTPFS_SOURCES ${HTTPFS_SOURCES} httpfs_client_wasm.cpp
++                     wasi_http_client.cpp http_client.c)
++else()
+   set(HTTPFS_SOURCES ${HTTPFS_SOURCES} crypto.cpp httpfs_httplib_client.cpp
+                      httpfs_connection_caching.cpp httpfs_curl_client.cpp)
+-else()
+-  set(HTTPFS_SOURCES ${HTTPFS_SOURCES} httpfs_client_wasm.cpp)
+ endif()
+ 
+ add_library(httpfs_library OBJECT ${HTTPFS_SOURCES})

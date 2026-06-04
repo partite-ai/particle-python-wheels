@@ -17,7 +17,7 @@ From a wasi-targeted pip (i.e. running inside a `wasm32-wasip2` CPython):
 ```
 pip install \
   --extra-index-url https://<owner>.github.io/<repo>/simple/ \
-  cffi cryptography pydantic-core regex pyyaml
+  cffi cryptography pydantic-core regex pyyaml duckdb numpy pandas
 ```
 
 `--extra-index-url` keeps PyPI as the primary source. Our index only
@@ -33,11 +33,21 @@ we ship.
 | pydantic-core | 2.47.0     | `cp314-abi3-wasi_wasm32`    |
 | regex         | 2026.5.9   | `cp314-cp314-wasi_wasm32`   |
 | PyYAML        | 6.0.3      | `cp314-cp314-wasi_wasm32`   |
+| duckdb        | 1.5.3      | `cp314-cp314-wasi_wasm32`   |
+| numpy         | 2.4.6      | `cp314-cp314-wasi_wasm32`   |
+| pandas        | 3.0.3      | `cp314-cp314-wasi_wasm32`   |
 
 Versions are pinned in each subdir's Makefile (`CFFI_VERSION`,
 `CRYPTOGRAPHY_VERSION`, `PYDANTIC_CORE_VERSION`, `REGEX_VERSION`,
-`PYYAML_VERSION`). Bump there, push a new `v*` tag, and the release
+`PYYAML_VERSION`, `DUCKDB_PYTHON_VERSION`, `NUMPY_VERSION`,
+`PANDAS_VERSION`). Bump there, push a new `v*` tag, and the release
 workflow rebuilds.
+
+duckdb, numpy and pandas form a data stack: duckdb bundles 6 extensions
+(parquet/json/icu/inet/excel + remote reads over `wasi:http`); numpy is
+BLAS-less with wasm SIMD128; pandas builds on numpy. duckdb's numpy/
+pandas/pyarrow integrations are runtime-optional (the methods raise
+`ImportError` if the module is absent).
 
 Note: regex and PyYAML are tagged `cp314-cp314` rather than
 `cp314-abi3` because their C extensions use CPython internals and
@@ -127,6 +137,47 @@ pyyaml/          PyYAML 6.0.3 wheel. Also cross-builds libyaml 0.2.5
                  (autotools) and runs Cython on _yaml.pyx → _yaml.c
                  inline — PyYAML 6.0.3's sdist dropped the
                  pre-generated .c. Heaviest of the hand-built wheels.
+
+duckdb/          DuckDB v1.5.3 cross-build as libduckdb_static.a +
+                 headers for wasm32-wasip2 (CMake + wasi-sdk;
+                 -fwasm-exceptions, single-threaded, no builtin
+                 extensions, no httplib). Phase 1: supporting static
+                 lib + the three core porting patches; not a wheel.
+
+duckdb-python/   DuckDB Python wheel (cp314-cp314, wasm32-wasip2).
+                 Phase 2: rebuilds core and cross-compiles the upstream
+                 pybind11 binding against the wasm CPython. No
+                 numpy/pandas/pyarrow at compile time — they're
+                 runtime-optional (.df()/.arrow()/.fetch_numpy()
+                 raise ImportError if absent). Reuses duckdb/'s core
+                 tarball + patches.
+                 Statically links 6 extensions (no runtime download):
+                 core_functions, parquet, json (in-tree); icu (in-tree,
+                 +2 ICU-vendored wasi patches); inet (out-of-tree, 0
+                 deps); excel (out-of-tree, needs cross-built expat +
+                 minizip-ng + cpython's zlib). httpfs is intentionally
+                 absent — it needs sockets/TLS wasi-libc lacks; a
+                 wasi:http-backed replacement is the path there.
+
+numpy/           NumPy 2.4.6 wheel (cp314-cp314, wasm32-wasip2).
+                 meson-python cross-build against the wasm CPython:
+                 BLAS-less (reference fallbacks), single-threaded;
+                 masquerades as emscripten (-D__EMSCRIPTEN__=1 +
+                 cross-file system=emscripten) to reuse numpy's only
+                 wasm-capable code paths. -msimd128 lets LLVM
+                 auto-vectorize the scalar loops (numpy's own
+                 universal-intrinsics have no wasm backend). A clang
+                 wrapper strips GNU-ld --start-group (wasm-ld rejects
+                 it). One patch disables the dladdr-based temp elision.
+
+pandas/          pandas 3.0.3 wheel (cp314-cp314, wasm32-wasip2).
+                 meson-python cross-build reusing the numpy/ machinery
+                 (same cross-file, clang wrapper, import-dynamic link,
+                 -msimd128). Compiles against a HOST numpy 2.4.6's C
+                 headers (numpy is pandas' build-time C-API dep and
+                 runtime companion — shipped as the separate numpy/
+                 wheel). numpy 2.4's npy_cpu.h already knows __wasm__,
+                 so no numpy-header patching is needed.
 
 scripts/         build-pages-index.sh — emits the PEP 503 simple/ tree
                  at release time, pointing at the latest Release's

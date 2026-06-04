@@ -1,0 +1,23 @@
+--- a/src/common/local_file_system.cpp
++++ b/src/common/local_file_system.cpp
+@@ -394,6 +394,7 @@
+ 	}
+ #endif
+ 
++#ifndef __wasi__
+ 	if (flags.Lock() != FileLockType::NO_LOCK) {
+ 		// set lock on file
+ 		// but only if it is not an input/output stream
+@@ -453,6 +454,12 @@
+ 			}
+ 		}
+ 	}
++#else
++	// wasi-libc's fcntl() does not implement advisory locking (F_SETLK /
++	// F_GETLK / F_RDLCK / F_WRLCK are undefined). A wasi DuckDB embedding
++	// is single-process, so there is no cross-process contention to guard
++	// against — treat any requested lock as a successful no-op.
++#endif
+ 
+ 	auto file_handle = make_uniq<UnixFileHandle>(*this, path, fd, flags);
+ 	if (opener) {

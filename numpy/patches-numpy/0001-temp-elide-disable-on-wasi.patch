@@ -1,0 +1,11 @@
+--- a/numpy/_core/src/multiarray/temp_elide.c
++++ b/numpy/_core/src/multiarray/temp_elide.c
+@@ -59,7 +59,7 @@
+  * supported too by using the appropriate Windows APIs.
+  */
+ 
+-#if defined HAVE_BACKTRACE && defined HAVE_DLFCN_H && ! defined PYPY_VERSION
++#if defined HAVE_BACKTRACE && defined HAVE_DLFCN_H && ! defined PYPY_VERSION && ! defined __wasi__
+ 
+ #include <feature_detection_misc.h>
+ 

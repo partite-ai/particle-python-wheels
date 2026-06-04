@@ -1,0 +1,20 @@
+--- a/extension/icu/third_party/icu/common/putil.cpp
++++ b/extension/icu/third_party/icu/common/putil.cpp
+@@ -623,6 +623,17 @@
+ 
+ /* Generic time zone layer -------------------------------------------------- */
+ 
++#if defined(__wasi__)
++/* wasi-libc provides none of the POSIX global-state timezone API
++ * (tzset(), the `timezone` global, tzname[]). ICU's putilimp.h maps
++ * U_TZSET/U_TIMEZONE/U_TZNAME to them for POSIX-like platforms (wasi is
++ * not recognized and falls into that bucket). Undefine them so ICU takes
++ * its portable localtime()-based fallbacks, which wasi-libc does support. */
++#undef U_TZSET
++#undef U_TIMEZONE
++#undef U_TZNAME
++#endif
++
+ /* Time zone utilities */
+ U_CAPI void U_EXPORT2
+ uprv_tzset()

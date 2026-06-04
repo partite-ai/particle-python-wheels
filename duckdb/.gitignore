@@ -1,0 +1,5 @@
+# Cached upstream tarballs (DuckDB source + CMake) — survives
+# `make clean`, keyed on version.
+.cache/
+# Build output: libduckdb_static.a + headers.
+out/

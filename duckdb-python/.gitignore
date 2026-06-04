@@ -1,0 +1,5 @@
+# Cached upstream tarballs (duckdb-python + duckdb core + CMake) —
+# survives `make clean`, keyed on version.
+.cache/
+# Built wheel.
+out/

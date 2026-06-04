@@ -12,6 +12,10 @@
 #   regex/           regex wheel (mrab-regex; cp314, wasm32-wasip2).
 #   pyyaml/          PyYAML wheel + libyaml.a cross-build (cp314,
 #                    wasm32-wasip2).
+#   duckdb/          DuckDB v1.5.3 cross-build as libduckdb_static.a
+#                    + headers for wasm32-wasip2. Supporting input
+#                    for a future duckdb Python wheel; not a wheel
+#                    itself yet.
 #
 # This file:
 #   1. Drives the four sub-builds in dependency order.
@@ -44,11 +48,16 @@ CRYPTOGRAPHY_DIR  := $(THIS_DIR)cryptography
 PYDANTIC_CORE_DIR := $(THIS_DIR)pydantic-core
 REGEX_DIR         := $(THIS_DIR)regex
 PYYAML_DIR        := $(THIS_DIR)pyyaml
+DUCKDB_DIR        := $(THIS_DIR)duckdb
+DUCKDB_PYTHON_DIR := $(THIS_DIR)duckdb-python
+NUMPY_DIR         := $(THIS_DIR)numpy
+PANDAS_DIR        := $(THIS_DIR)pandas
 
 # ---- top-level entry points ---------------------------------------------
 
 .PHONY: all wheels index clean \
-        cpython libffi-wasi cffi cryptography pydantic-core regex pyyaml
+        cpython libffi-wasi cffi cryptography pydantic-core regex pyyaml \
+        duckdb duckdb-python numpy pandas
 
 all: index
 
@@ -86,6 +95,38 @@ regex: cpython
 pyyaml: cpython
 	$(MAKE) -C $(PYYAML_DIR)
 
+# duckdb cross-builds the DuckDB v1.5.3 C++ engine as libduckdb_static.a
+# for wasm32-wasip2 (CMake + wasi-sdk; -fwasm-exceptions, threads off,
+# extensions off). Phase 1 only — produces a supporting static lib +
+# headers, not a wheel. No CPython dependency since the engine itself
+# has no Python in it.
+duckdb:
+	$(MAKE) -C $(DUCKDB_DIR)
+
+# duckdb-python builds the actual DuckDB Python wheel: it rebuilds core
+# (with a reduced extension set) and cross-compiles the upstream
+# pybind11 binding against the wasm CPython. No numpy/pandas/pyarrow at
+# compile time — those are runtime-optional. Needs the wasm CPython, so
+# it depends on cpython. (Reuses ../duckdb's core tarball + patches but
+# does its own core build, since the binding links CMake targets, not a
+# prebuilt .a.)
+duckdb-python: cpython
+	$(MAKE) -C $(DUCKDB_PYTHON_DIR)
+
+# numpy cross-builds NumPy 2.4.6 via meson-python against the wasm CPython
+# (BLAS-less, single-threaded, wasm SIMD128; emscripten code-path masquerade).
+# Independent of duckdb; needs the wasm CPython, so depends on cpython.
+numpy: cpython
+	$(MAKE) -C $(NUMPY_DIR)
+
+# pandas cross-builds pandas 3.0.3 via meson-python. Build inputs are the
+# wasm CPython + a HOST numpy (installed by pandas' own toolchain, for C
+# headers). numpy here is the RUNTIME companion (pandas can't run without
+# it), so we also build the wasi numpy wheel to keep the data stack
+# coherent — but it is not a compile-time input to pandas.
+pandas: cpython numpy
+	$(MAKE) -C $(PANDAS_DIR)
+
 # ---- wheel collection ---------------------------------------------------
 #
 # Each subdir drops its wheel into <subdir>/out/. Copy whatever lands
@@ -94,12 +135,21 @@ pyyaml: cpython
 
 wheels: $(DIST_DIR)/.collected
 
-$(DIST_DIR)/.collected: cffi cryptography pydantic-core regex pyyaml | $(DIST_DIR)
-	cp $(CFFI_DIR)/out/*.whl $(DIST_DIR)/
-	cp $(CRYPTOGRAPHY_DIR)/out/*.whl $(DIST_DIR)/
-	cp $(PYDANTIC_CORE_DIR)/out/*.whl $(DIST_DIR)/
-	cp $(REGEX_DIR)/out/*.whl $(DIST_DIR)/
-	cp $(PYYAML_DIR)/out/*.whl $(DIST_DIR)/
+# Collect ONLY the wasi_wasm32-tagged wheels. Every wheel we ship carries
+# that platform tag (it's what makes pip on non-wasi hosts skip them); the
+# glob is restricted to it so a stale or mis-tagged artifact lingering in a
+# subdir's out/ (e.g. an old cp314-abi3-any intermediate) can never leak
+# into dist/ and get picked by pip on the wrong platform.
+$(DIST_DIR)/.collected: cffi cryptography pydantic-core regex pyyaml \
+                        duckdb-python numpy pandas | $(DIST_DIR)
+	cp $(CFFI_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(CRYPTOGRAPHY_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(PYDANTIC_CORE_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(REGEX_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(PYYAML_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(DUCKDB_PYTHON_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(NUMPY_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
+	cp $(PANDAS_DIR)/out/*-wasi_wasm32.whl $(DIST_DIR)/
 	cd $(DIST_DIR) && sha256sum *.whl > SHA256SUMS
 	@touch $@
 	@echo "✓  wheels in $(DIST_DIR)/:"
@@ -166,3 +216,7 @@ clean:
 	-$(MAKE) -C $(PYDANTIC_CORE_DIR) clean
 	-$(MAKE) -C $(REGEX_DIR) clean
 	-$(MAKE) -C $(PYYAML_DIR) clean
+	-$(MAKE) -C $(DUCKDB_DIR) clean
+	-$(MAKE) -C $(DUCKDB_PYTHON_DIR) clean
+	-$(MAKE) -C $(NUMPY_DIR) clean
+	-$(MAKE) -C $(PANDAS_DIR) clean

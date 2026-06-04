@@ -317,10 +317,10 @@ DPY_CXX_STANDARD_LIBS := $(OPNEW_OBJ) \
 
 .PHONY: all toolchain configure wheel clean cpython check-host-deps cxx-eh-runtime
 
+all: wheel
+
 # Build just the PIC+exceptions C++ runtime (handy to validate it independently).
 cxx-eh-runtime: $(CXX_EH_PIC_LIBDIR)/libc++abi.a
-
-all: wheel
 
 check-host-deps:
 	@command -v curl >/dev/null || { echo "ERROR: curl not on PATH"; exit 1; }

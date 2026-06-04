@@ -3,7 +3,7 @@
 # implies the local dev container also works.
 #
 # Installs:
-#   - WASI SDK 30 to /opt/wasi-sdk (matches dev container's pin)
+#   - WASI SDK 33 to /opt/wasi-sdk (matches dev container's pin)
 #   - Rust stable with the wasm32-wasip2 target
 #   - uv (Astral's Python manager — cryptography's Makefile uses it to
 #     provision a host CPython 3.14 venv with cffi + setuptools)
@@ -26,7 +26,7 @@ runs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
       with:
         path: /opt/wasi-sdk
-        key: wasi-sdk-30-${{ runner.os }}-${{ runner.arch }}
+        key: wasi-sdk-33-${{ runner.os }}-${{ runner.arch }}
 
     - name: install wasi-sdk
       if: steps.cache-wasi-sdk.outputs.cache-hit != 'true'
@@ -36,19 +36,19 @@ runs:
         # sha256 of each per-arch tarball, pinned to defend against a
         # re-pushed release replacing the binary under the same tag.
         # Refresh on version bump via the release's asset metadata:
-        #   curl -fsSL https://api.github.com/repos/WebAssembly/wasi-sdk/releases/tags/wasi-sdk-30 \
+        #   curl -fsSL https://api.github.com/repos/WebAssembly/wasi-sdk/releases/tags/wasi-sdk-33 \
         #     | jq -r '.assets[] | select(.name|endswith("-linux.tar.gz")) | "\(.name) \(.digest)"'
         case "$(uname -m)" in
-          x86_64)  arch=x86_64; sha256=0507679dff16814b74516cd969a9b16d2ced1347388024bc7966264648c78bfb ;;
-          aarch64) arch=arm64;  sha256=6f2977942308d91b0123978da3c6a0d6fce780994b3b020008c617e26764ea40 ;;
+          x86_64)  arch=x86_64; sha256=0ba8b5bfaeb2adf3f29bab5841d76cf5318ab8e1642ea195f88baba1abd47bce ;;
+          aarch64) arch=arm64;  sha256=4f98ee738c7abb45c81a94d1461fc53cc569d1cd01498951c8184d841a027844 ;;
           *) echo "unsupported arch $(uname -m)"; exit 1 ;;
         esac
         curl -fsSL -o /tmp/wasi-sdk.tar.gz \
-          "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-30/wasi-sdk-30.0-${arch}-linux.tar.gz"
+          "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-${arch}-linux.tar.gz"
         echo "${sha256}  /tmp/wasi-sdk.tar.gz" | sha256sum -c -
         sudo mkdir -p /opt
         sudo tar -xzf /tmp/wasi-sdk.tar.gz -C /opt
-        sudo mv "/opt/wasi-sdk-30.0-${arch}-linux" /opt/wasi-sdk
+        sudo mv "/opt/wasi-sdk-33.0-${arch}-linux" /opt/wasi-sdk
         rm /tmp/wasi-sdk.tar.gz
 
     - name: export WASI_SDK_PATH
@@ -86,6 +86,24 @@ runs:
           ~/.cache/particle/cpython-build
           ~/cargo-target/cpython-0e13686da8bb881b059d35e23c32bcd2e6440099
         key: cpython-0e13686da-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cpython/Makefile') }}
+
+    # PIC + exceptions C++ runtime (libc++/libc++abi/libunwind) that the duckdb
+    # wheel static-links — wasi-sdk ships no PIC+eh variant, so duckdb-python's
+    # Makefile builds it from LLVM source via cxx-eh-pic-runtime/build.sh (~15min
+    # + an LLVM clone). Cache the install so only build.sh changes (the recipe)
+    # or a wasi-sdk bump (the literal `33-` below) force a rebuild. The Makefile
+    # rule treats it as built when libc++abi.a is present, so a hit skips it.
+    - name: cache PIC+exceptions C++ runtime
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+      with:
+        path: ~/cxx-eh-pic-install
+        key: cxx-eh-pic-33-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('cxx-eh-pic-runtime/build.sh') }}
+
+    - name: refresh cxx-eh-pic mtimes
+      # On a cache hit the restored .a files predate the fresh checkout's
+      # build.sh; touch them so make doesn't re-trigger the 15-min build.
+      shell: bash
+      run: touch -c ~/cxx-eh-pic-install/lib/*.a 2>/dev/null || true
 
     # libffi-wasi writes its outputs in-tree (libffi-wasi/out/ +
     # libffi-wasi/build/). Without caching them, cffi's downstream

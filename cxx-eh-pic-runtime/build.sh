@@ -60,6 +60,12 @@ fi
     git apply --include='libunwind/src/Unwind-wasm.c' "$WASI_SDK_SRC/src/llvm-pr-185770.patch"
   true )
 
+# *_HERMETIC_STATIC_LIBRARY=ON below builds libc++/libc++abi/libunwind with all
+# symbols HIDDEN. Critical: when static-linked into our -fPIC -shared module,
+# default-visibility C++ symbols become env imports, and the dicej dyld can't
+# resolve them (it satisfies imports from OTHER modules — the C-only CPython main
+# module has no libc++). Hidden → they bind locally. The CONSUMER must match with
+# -fvisibility=hidden -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS (see ../duckdb-python).
 rm -rf "$BUILD"
 "$CMAKE" -S "$LLVM_SRC/runtimes" -B "$BUILD" \
   -DCMAKE_TOOLCHAIN_FILE="$SDK/share/cmake/wasi-sdk-p2.cmake" \
@@ -72,6 +78,9 @@ rm -rf "$BUILD"
   -DLLVM_COMPILER_CHECKED=ON \
   -DLLVM_INCLUDE_TESTS=OFF \
   -DLLVM_INCLUDE_DOCS=OFF \
+  -DLIBCXX_HERMETIC_STATIC_LIBRARY=ON \
+  -DLIBCXXABI_HERMETIC_STATIC_LIBRARY=ON \
+  -DLIBUNWIND_HERMETIC_STATIC_LIBRARY=ON \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DLIBCXX_ENABLE_SHARED=OFF \
   -DLIBCXX_ENABLE_EXCEPTIONS=ON \

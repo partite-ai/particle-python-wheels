@@ -266,7 +266,21 @@ MMAN_STUB_OBJ := $(BUILD_DIR)/wasi-mman-stub.o
 #   dropped. The C++ runtime ABI is identical for both (same __cxa_throw /
 #   personality / __wasm_lpad_context imports), so this is a pure codegen
 #   change — no runtime-symbol impact.
+# -fvisibility=hidden + -fvisibility-inlines-hidden + _LIBCPP_DISABLE_VISIBILITY
+# _ANNOTATIONS: make the statically-linked C++ runtime FULLY hidden/local. The
+# dicej dyld does NOT satisfy a module's own env imports from its own exports —
+# it looks in other modules (the C-only CPython main module, which has no
+# libc++). So any libc++ symbol left at default visibility becomes an
+# unsatisfiable env import ("... is not exported in module" at dlopen). The
+# define drops libc++'s _LIBCPP_EXPORTED_FROM_ABI annotations so its symbols
+# follow -fvisibility=hidden — both the extern-template members pulled from our
+# hermetic libc++.a AND the vague-linkage ones emitted in duckdb's own TUs
+# (e.g. std::stringstream dtors/thunks). Pairs with the HERMETIC_STATIC_LIBRARY
+# build of ../cxx-eh-pic-runtime. PyInit__duckdb stays exported (PyMODINIT_FUNC
+# forces default visibility on it).
 DPY_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
+              -fvisibility=hidden -fvisibility-inlines-hidden \
+              -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS \
               -DDUCKDB_WASM=1 \
               -DFSST_MUST_ALIGN \
               $(WASI_EMULATED_DEFS) \
@@ -578,14 +592,16 @@ $(EMULATED_MMAN_OBJ): $(EMULATED_MMAN_ARCHIVE)
 $(MMAN_STUB_OBJ): $(MMAN_STUB_SRC) | $(CMAKE)
 	@mkdir -p $(BUILD_DIR)
 	@# -D_WASI_EMULATED_MMAN: wasi's <sys/mman.h> #errors without it.
-	$(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -O2 -fPIC \
+	$(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -O2 -fPIC -fvisibility=hidden \
 	    -D_WASI_EMULATED_MMAN -c $< -o $@
 
 # Strong operator new/delete override (see wasi-operator-new.cpp). Built with
-# exceptions (throwing operator new uses std::bad_alloc).
+# exceptions (throwing operator new uses std::bad_alloc) and hidden visibility
+# to match DPY_CFLAGS (keep the whole C++ runtime local, not env-imported).
 $(OPNEW_OBJ): $(OPNEW_SRC) | $(CMAKE)
 	@mkdir -p $(BUILD_DIR)
 	$(WASI_SDK_PATH)/bin/clang++ --target=wasm32-wasip2 -O2 -fPIC \
+	    -fvisibility=hidden -fvisibility-inlines-hidden -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS \
 	    -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -c $< -o $@
 
 # The PIC + exceptions C++ runtime (one-time ~15min build from LLVM source).

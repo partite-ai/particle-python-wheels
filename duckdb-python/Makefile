@@ -230,14 +230,35 @@ WASI_EMULATED_DEFS := -D_WASI_EMULATED_SIGNAL \
                       -D_WASI_EMULATED_PROCESS_CLOCKS \
                       -D_WASI_EMULATED_MMAN
 
+# signal/getpid/process-clocks are left as import-dynamic env imports: the
+# embedding's libpython.so links those emulated libs and so EXPORTS their
+# symbols (see ../cpython/Makefile). It does NOT link emulated-mman, so
+# mmap/munmap are handled separately below (whole-archived into the module).
 WASI_EMULATED_LIBS := -lwasi-emulated-signal \
                       -lwasi-emulated-getpid \
-                      -lwasi-emulated-process-clocks \
-                      -lwasi-emulated-mman
+                      -lwasi-emulated-process-clocks
+
+# mmap/munmap/mprotect: link wasi-libc's emulated-mman implementation as an
+# OBJECT (extracted from the .a) rather than via -lwasi-emulated-mman.
+# --whole-archive does NOT define them locally in this shared-module +
+# import-dynamic link (they stay env imports); linking the object directly
+# does (an explicit object's strong definitions always win — verified).
+EMULATED_MMAN_ARCHIVE := $(WASI_SYSROOT_SHARED)/libwasi-emulated-mman.a
+EMULATED_MMAN_OBJ     := $(BUILD_DIR)/wasi-emulated-mman.o
+# madvise: wasi-libc has no implementation at all; local no-op (see the .c).
+MMAN_STUB_SRC := $(THIS_DIR)wasi-mman-stub.c
+MMAN_STUB_OBJ := $(BUILD_DIR)/wasi-mman-stub.o
 
 # Applied to every TU (core + binding). Mirrors ../duckdb plus the wasm
 # CPython include for the binding's Python.h.
-DPY_CFLAGS := -fwasm-exceptions \
+# -fwasm-exceptions: wasm EH (DuckDB's error model is C++ exceptions).
+# -mllvm -wasm-use-legacy-eh=false: emit the STANDARDIZED exception-handling
+#   proposal (try_table / throw_ref / exnref) instead of LLVM's default
+#   legacy EH (try / catch / rethrow / delegate), which modern engines have
+#   dropped. The C++ runtime ABI is identical for both (same __cxa_throw /
+#   personality / __wasm_lpad_context imports), so this is a pure codegen
+#   change — no runtime-symbol impact.
+DPY_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
               -DDUCKDB_WASM=1 \
               -DFSST_MUST_ALIGN \
               $(WASI_EMULATED_DEFS) \
@@ -248,11 +269,18 @@ DPY_CFLAGS := -fwasm-exceptions \
 # ../pyyaml / ../cffi — leave Python C API + libc symbols as env imports
 # resolved at .so-load time by the embedding's dyld, rather than
 # hard-linking libpython. Module libraries use CMAKE_MODULE_LINKER_FLAGS.
+#
+# EXCEPTION: mmap/munmap/madvise are linked LOCALLY, not imported. The
+# embedding does not export them (libpython.so omits emulated-mman), so an
+# import would be unresolved at load. We link wasi-libc's emulated-mman
+# object (mmap/munmap/mprotect) + a madvise no-op object directly, so their
+# strong definitions land in the module — no env import, no NEEDED.
 DPY_MODULE_LDFLAGS := -Wl,--no-entry \
                       -Wl,--unresolved-symbols=import-dynamic \
                       -Wl,--allow-undefined \
                       -L$(WASI_SYSROOT_SHARED) -Wl,-l:libc.so \
-                      $(WASI_EMULATED_LIBS)
+                      $(WASI_EMULATED_LIBS) \
+                      $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ)
 
 # ---- phony entry points --------------------------------------------------
 
@@ -501,7 +529,21 @@ $(CMAKE_BUILD)/CMakeCache.txt: $(BUILD_DIR)/.patched $(INET_SRC)/CMakeLists.txt 
 # Stage 4: build the _duckdb module
 # =============================================================================
 
-$(BUILD_DIR)/_duckdb$(EXT_SUFFIX): $(CMAKE_BUILD)/CMakeCache.txt
+# Extract wasi-libc's emulated-mman object (mmap/munmap/mprotect) from the .a
+# so it can be linked as a plain object (see DPY_MODULE_LDFLAGS for why).
+$(EMULATED_MMAN_OBJ): $(EMULATED_MMAN_ARCHIVE)
+	@mkdir -p $(BUILD_DIR)
+	$(WASI_SDK_PATH)/bin/llvm-ar x --output=$(BUILD_DIR) $(EMULATED_MMAN_ARCHIVE) mman.c.obj
+	mv $(BUILD_DIR)/mman.c.obj $@
+
+# madvise stub object, linked into the module (see DPY_MODULE_LDFLAGS).
+$(MMAN_STUB_OBJ): $(MMAN_STUB_SRC) | $(CMAKE)
+	@mkdir -p $(BUILD_DIR)
+	@# -D_WASI_EMULATED_MMAN: wasi's <sys/mman.h> #errors without it.
+	$(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -O2 -fPIC \
+	    -D_WASI_EMULATED_MMAN -c $< -o $@
+
+$(BUILD_DIR)/_duckdb$(EXT_SUFFIX): $(CMAKE_BUILD)/CMakeCache.txt $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ)
 	@echo "  building _duckdb with JOBS=$(JOBS) (nproc=$(NPROC), mem=$(MEM_GB)GB)"
 	$(CMAKE) --build $(CMAKE_BUILD) --parallel $(JOBS) --target _duckdb
 	@# Locate the built module (pybind names it _duckdb<EXT_SUFFIX>).

@@ -148,7 +148,10 @@ WASI_EMULATED_LIBS := -lwasi-emulated-signal \
                       -lwasi-emulated-process-clocks \
                       -lwasi-emulated-mman
 
-DUCKDB_EXTRA_CFLAGS := -fwasm-exceptions \
+# -mllvm -wasm-use-legacy-eh=false: emit the standardized exception-handling
+# proposal (try_table/throw_ref) instead of LLVM's default legacy EH. Same
+# C++ runtime ABI, pure codegen change. (See ../duckdb-python/Makefile.)
+DUCKDB_EXTRA_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
                        -DDUCKDB_WASM=1 \
                        -DFSST_MUST_ALIGN \
                        $(WASI_EMULATED_DEFS) \

@@ -79,7 +79,7 @@ CFLAGS_PYYAML := --target=wasm32-wasip2 \
 
 # Same link pattern as cffi/regex: leave Python C API + libc symbols
 # as env imports resolved at .so-load time by our dyld.
-COMPILER_RT := $(WASI_SDK_PATH)/lib/clang/21/lib/wasm32-unknown-wasip2/libclang_rt.builtins.a
+COMPILER_RT := $(shell $(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -print-runtime-dir)/libclang_rt.builtins.a
 
 LDFLAGS := --target=wasm32-wasip2 \
            -nostdlib -nodefaultlibs \

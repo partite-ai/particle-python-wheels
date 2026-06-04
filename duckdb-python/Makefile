@@ -119,6 +119,14 @@ WASI_SDK_PATH       ?= /opt/wasi-sdk
 WASI_SYSROOT        := $(WASI_SDK_PATH)/share/wasi-sysroot
 WASI_SYSROOT_SHARED := $(WASI_SYSROOT)/lib/wasm32-wasip2
 
+# We don't use the SDK's eh/ multilib directly (it's non-PIC,
+# incompatible with our -fPIC -shared module) — instead we link a PIC+exceptions
+# C++ runtime we build ourselves (see ../cxx-eh-pic-runtime/).
+# PIC + exceptions C++ runtime (libc++/libc++abi/libunwind), built from LLVM
+# source by ../cxx-eh-pic-runtime/build.sh. Linked statically into the module.
+CXX_EH_PIC_PREFIX   ?= $(HOME)/cxx-eh-pic-install
+CXX_EH_PIC_LIBDIR   := $(CXX_EH_PIC_PREFIX)/lib
+
 # wasm CPython 3.14 (built by ../cpython). Mirrors the path convention
 # in ../pyyaml/Makefile and ../cryptography/Makefile.
 CPYTHON_DIR      := $(THIS_DIR)../cpython
@@ -275,16 +283,42 @@ DPY_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
 # import would be unresolved at load. We link wasi-libc's emulated-mman
 # object (mmap/munmap/mprotect) + a madvise no-op object directly, so their
 # strong definitions land in the module — no env import, no NEEDED.
-DPY_MODULE_LDFLAGS := -Wl,--no-entry \
+# -fwasm-exceptions at link: required so clang drives the wasm-EH-aware link
+# (personality / exception-tag handling) consistently with our eh runtime.
+DPY_MODULE_LDFLAGS := -fwasm-exceptions \
+                      -Wl,--no-entry \
                       -Wl,--unresolved-symbols=import-dynamic \
                       -Wl,--allow-undefined \
                       -L$(WASI_SYSROOT_SHARED) -Wl,-l:libc.so \
                       $(WASI_EMULATED_LIBS) \
                       $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ)
 
+# Statically link our PIC + exceptions C++ runtime INTO the module. clang++
+# does not auto-add a C++ runtime for a -shared side module, and the embedding
+# (dicej CPython) is C and exports none of it, so without this the whole C++
+# runtime — operator new/delete, the __cxa_* exception ABI, _Unwind_*,
+# __cpp_exception — becomes unresolved env imports and the module fails to load
+# ("__cxa_allocate_exception is not exported"). We CANNOT use wasi-sdk's eh/
+# multilib (non-PIC), hence ../cxx-eh-pic-runtime/.
+#
+# Order matters: the operator-new override (strong) must precede libc++abi
+# (whose operator new is weak → otherwise imported). These go through
+# CMAKE_CXX_STANDARD_LIBRARIES, which CMake appends AFTER the object files, so
+# the archives are pulled to satisfy the objects' references (whereas
+# CMAKE_MODULE_LINKER_FLAGS land BEFORE the objects and wouldn't pull them).
+OPNEW_SRC := $(THIS_DIR)wasi-operator-new.cpp
+OPNEW_OBJ := $(BUILD_DIR)/wasi-operator-new.o
+DPY_CXX_STANDARD_LIBS := $(OPNEW_OBJ) \
+                         $(CXX_EH_PIC_LIBDIR)/libc++.a \
+                         $(CXX_EH_PIC_LIBDIR)/libc++abi.a \
+                         $(CXX_EH_PIC_LIBDIR)/libunwind.a
+
 # ---- phony entry points --------------------------------------------------
 
-.PHONY: all toolchain configure wheel clean cpython check-host-deps
+.PHONY: all toolchain configure wheel clean cpython check-host-deps cxx-eh-runtime
+
+# Build just the PIC+exceptions C++ runtime (handy to validate it independently).
+cxx-eh-runtime: $(CXX_EH_PIC_LIBDIR)/libc++abi.a
 
 all: wheel
 
@@ -523,7 +557,11 @@ $(CMAKE_BUILD)/CMakeCache.txt: $(BUILD_DIR)/.patched $(INET_SRC)/CMakeLists.txt 
 	    -DCMAKE_C_FLAGS='$(DPY_CFLAGS)' \
 	    -DCMAKE_CXX_FLAGS='$(DPY_CFLAGS)' \
 	    -DCMAKE_MODULE_LINKER_FLAGS='$(DPY_MODULE_LDFLAGS)' \
-	    -DCMAKE_SHARED_LINKER_FLAGS='$(DPY_MODULE_LDFLAGS)'
+	    -DCMAKE_SHARED_LINKER_FLAGS='$(DPY_MODULE_LDFLAGS)' \
+	    -DCMAKE_CXX_STANDARD_LIBRARIES='$(DPY_CXX_STANDARD_LIBS)' \
+	    -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
+	    -DCMAKE_C_COMPILER_TARGET=wasm32-wasip2 \
+	    -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip2
 
 # =============================================================================
 # Stage 4: build the _duckdb module
@@ -543,7 +581,22 @@ $(MMAN_STUB_OBJ): $(MMAN_STUB_SRC) | $(CMAKE)
 	$(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -O2 -fPIC \
 	    -D_WASI_EMULATED_MMAN -c $< -o $@
 
-$(BUILD_DIR)/_duckdb$(EXT_SUFFIX): $(CMAKE_BUILD)/CMakeCache.txt $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ)
+# Strong operator new/delete override (see wasi-operator-new.cpp). Built with
+# exceptions (throwing operator new uses std::bad_alloc).
+$(OPNEW_OBJ): $(OPNEW_SRC) | $(CMAKE)
+	@mkdir -p $(BUILD_DIR)
+	$(WASI_SDK_PATH)/bin/clang++ --target=wasm32-wasip2 -O2 -fPIC \
+	    -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -c $< -o $@
+
+# The PIC + exceptions C++ runtime (one-time ~15min build from LLVM source).
+# Built only if missing; mirrors what wasi-sdk would ship if it built eh+PIC.
+CXX_EH_PIC_BUILD := $(THIS_DIR)../cxx-eh-pic-runtime/build.sh
+$(CXX_EH_PIC_LIBDIR)/libc++abi.a: $(CXX_EH_PIC_BUILD) | $(CMAKE)
+	@echo "  building PIC+exceptions C++ runtime via $(CXX_EH_PIC_BUILD) ..."
+	WASI_SDK_PATH=$(WASI_SDK_PATH) PREFIX=$(CXX_EH_PIC_PREFIX) \
+	CMAKE=$(CMAKE) JOBS=$(JOBS) bash $(CXX_EH_PIC_BUILD)
+
+$(BUILD_DIR)/_duckdb$(EXT_SUFFIX): $(CMAKE_BUILD)/CMakeCache.txt $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ) $(OPNEW_OBJ) $(CXX_EH_PIC_LIBDIR)/libc++abi.a
 	@echo "  building _duckdb with JOBS=$(JOBS) (nproc=$(NPROC), mem=$(MEM_GB)GB)"
 	$(CMAKE) --build $(CMAKE_BUILD) --parallel $(JOBS) --target _duckdb
 	@# Locate the built module (pybind names it _duckdb<EXT_SUFFIX>).

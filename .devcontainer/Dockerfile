@@ -66,11 +66,19 @@ RUN cargo install --locked --root /usr/local wasm-tools
 
 # Install wasi-sdk for cross-compiling C/C++ to wasm32-wasip2. Used by the
 # python-runtime build to produce libpython3.14.so + its dependencies (zlib,
-# sqlite, libc++, wasi-emulated-* shims). Version is pinned to match what
-# componentize-py 0.23.0 uses — dicej's CPython patches (commit 0e13686)
-# were validated against this clang/sysroot pair. Releases:
+# sqlite, libc++, wasi-emulated-* shims) AND by the duckdb wheel.
+#
+# Pinned to 33 — the first release whose libc++/libc++abi can be built with C++
+# exceptions (LLVM 22). DuckDB's error model IS C++ exceptions, which don't even
+# link on wasi-sdk <=32 (its prebuilt runtime is -fno-exceptions; the tell is
+# cxa_noexception.cpp.o in libc++abi.a). 33 ships an eh/ multilib, but it's
+# non-PIC and our wheels are -fPIC -shared (dicej dynamic linking), so we build a
+# PIC+exceptions runtime from source and static-link it (see ../cxx-eh-pic-runtime
+# and ../duckdb-python). Bumped from 30 (clang 21), which dicej's CPython patches
+# (commit 0e13686, componentize-py 0.23.0) were first validated against; the whole
+# stack now builds on 33 (clang 22). Releases:
 #   https://github.com/WebAssembly/wasi-sdk/releases
-ARG WASI_SDK_VERSION=30
+ARG WASI_SDK_VERSION=33
 # sha256 of each per-arch tarball, pinned to defend against a re-pushed
 # release replacing the binary under the same tag. Refresh on version
 # bump via the release's asset metadata:
@@ -78,8 +86,8 @@ ARG WASI_SDK_VERSION=30
 #     | jq -r '.assets[] | select(.name|endswith("-linux.tar.gz")) | "\(.name) \(.digest)"'
 RUN ARCH=$(dpkg --print-architecture) && \
   case "$ARCH" in \
-    arm64) WASI_ARCH=arm64;  SHA256=6f2977942308d91b0123978da3c6a0d6fce780994b3b020008c617e26764ea40 ;; \
-    amd64) WASI_ARCH=x86_64; SHA256=0507679dff16814b74516cd969a9b16d2ced1347388024bc7966264648c78bfb ;; \
+    arm64) WASI_ARCH=arm64;  SHA256=4f98ee738c7abb45c81a94d1461fc53cc569d1cd01498951c8184d841a027844 ;; \
+    amd64) WASI_ARCH=x86_64; SHA256=0ba8b5bfaeb2adf3f29bab5841d76cf5318ab8e1642ea195f88baba1abd47bce ;; \
     *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL -o /tmp/wasi-sdk.tar.gz \

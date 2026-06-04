@@ -82,7 +82,7 @@ CFLAGS := --target=wasm32-wasip2 \
 # cffi's _cffi_backend processes long double (128-bit IEEE quad on this
 # target) which generates __extenddftf2 / __trunctfdf2 / etc. calls that
 # only compiler-rt provides. wasi-libc-shared doesn't ship them.
-COMPILER_RT := $(WASI_SDK_PATH)/lib/clang/21/lib/wasm32-unknown-wasip2/libclang_rt.builtins.a
+COMPILER_RT := $(shell $(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -print-runtime-dir)/libclang_rt.builtins.a
 
 LDFLAGS := --target=wasm32-wasip2 \
            -nostdlib -nodefaultlibs \

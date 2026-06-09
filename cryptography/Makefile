@@ -246,6 +246,20 @@ $(AWS_LC_LIBCRYPTO): | $(AWS_LC_SRC)/CMakeLists.txt $(CMAKE)
 
 PYO3_CONFIG_FILE_ABS := $(THIS_DIR)pyo3-wasm-cpython314.txt
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` builds the wheel with DWARF (-C debuginfo=2 for the Rust
+# crate, -g for cryptography's cffi C shim) while keeping --release
+# optimization, and never strips, so it can be debugged at source level in a
+# DWARF-aware wasm engine. cargo treats RUSTFLAGS as part of the build
+# fingerprint, so a DEBUG toggle re-triggers a rebuild on its own (no stamp
+# needed). AWS-LC stays at release (rebuilding it is expensive and it's not
+# the code under debug). The wheel keeps its normal filename, so a DEBUG
+# build OVERWRITES the release wheel in out/ — rebuild without DEBUG before
+# the root `make` collects into dist/.
+DEBUG ?=
+DEBUG_CFLAGS    := $(if $(DEBUG),-g,)
+DEBUG_RUSTFLAGS := $(if $(DEBUG),-C debuginfo=2,)
+
 wheel: $(WHEEL_OUT)
 
 $(CRYPTOGRAPHY_TARBALL): | check-host-deps
@@ -287,14 +301,14 @@ $(WHEEL_OUT): $(BUILD_DIR)/.patched $(AWS_LC_LIBCRYPTO) $(MATURIN) $(BINDGEN) $(
 	  OPENSSL_STATIC=1 \
 	  WASI_SYSROOT=$(WASI_SYSROOT) \
 	  BINDGEN_EXTRA_CLANG_ARGS_wasm32_wasip2='--sysroot=$(WASI_SYSROOT)' \
-	  RUSTFLAGS='-C relocation-model=pic -C link-self-contained=no -C link-arg=-Wl,--no-entry -C link-arg=-Wl,--unresolved-symbols=import-dynamic -C link-arg=-Wl,--allow-undefined -C link-arg=-L$(WASI_SYSROOT_SHARED) -C link-arg=-Wl,-l:libc.so' \
+	  RUSTFLAGS='-C relocation-model=pic -C link-self-contained=no -C link-arg=-Wl,--no-entry -C link-arg=-Wl,--unresolved-symbols=import-dynamic -C link-arg=-Wl,--allow-undefined -C link-arg=-L$(WASI_SYSROOT_SHARED) -C link-arg=-Wl,-l:libc.so $(DEBUG_RUSTFLAGS)' \
 	  CARGO_INCREMENTAL=0 \
 	  CARGO_BUILD_TARGET=wasm32-wasip2 \
 	  CC=$(WASI_SDK_PATH)/bin/clang \
 	  AR=$(WASI_SDK_PATH)/bin/ar \
 	  CC_wasm32_wasip2=$(WASI_SDK_PATH)/bin/clang \
 	  AR_wasm32_wasip2=$(WASI_SDK_PATH)/bin/ar \
-	  CFLAGS_wasm32_wasip2='--target=wasm32-wasip2 --sysroot=$(WASI_SYSROOT) -isystem $(CPYTHON_INCLUDE) -fPIC' \
+	  CFLAGS_wasm32_wasip2='--target=wasm32-wasip2 --sysroot=$(WASI_SYSROOT) -isystem $(CPYTHON_INCLUDE) -fPIC $(DEBUG_CFLAGS)' \
 	  CARGO_TARGET_WASM32_WASIP2_LINKER=$(WASI_SDK_PATH)/bin/clang \
 	  $(MATURIN) build --release --target wasm32-wasip2 \
 	    --out $(OUT_DIR)

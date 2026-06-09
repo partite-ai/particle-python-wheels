@@ -231,6 +231,43 @@ endif
 CMAKE_TARBALL_URL := https://github.com/Kitware/CMake/releases/download/v$(CMAKE_VERSION)/cmake-$(CMAKE_VERSION)-$(CMAKE_TARBALL_ARCH).tar.gz
 CMAKE_TARBALL     := $(CACHE_DIR)/cmake-$(CMAKE_VERSION)-$(CMAKE_TARBALL_ARCH).tar.gz
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` adds DWARF (-g) to every TU (DuckDB core + the pybind11
+# binding + our support objects) without lowering optimization (-O2 stays,
+# build type stays Release) and never strips, so _duckdb.so can be debugged
+# at source level in a DWARF-aware wasm engine — handy for chasing C++
+# faults (e.g. the documented exception-matching crash). -g is appended to
+# DPY_CFLAGS, so it flows into CMAKE_C_FLAGS/CMAKE_CXX_FLAGS. A mode flip
+# bumps the build-mode stamp below, which is a prerequisite of the CMake
+# configure (forcing a reconfigure so the new flags take) and of the
+# hand-compiled OPNEW/MMAN objects. The wheel keeps its normal filename, so
+# a DEBUG build OVERWRITES the release wheel in out/ — rebuild without DEBUG
+# before the root `make` collects into dist/.
+#
+# NOTE: a -g build of DuckDB core is LARGE (DWARF for the whole engine) and
+# the .so grows accordingly; this is expected.
+DEBUG ?=
+DEBUG_CFLAGS := $(if $(DEBUG),-g,)
+# pybind11_add_module appends an UNCONDITIONAL post-build `llvm-strip` of the
+# module (pybind11_strip, see build.make), which deletes DWARF *and* collapses
+# the wasm name section to just exported symbols — so a plain -g build still
+# ships symbol-less (stack traces show wasm-function[NNNN] indices). For
+# DEBUG, redirect CMAKE_STRIP to a no-op (`true`) so that post-build step does
+# nothing and both the DWARF and the full function-name section survive.
+NOOP_STRIP := $(shell command -v true || echo /bin/true)
+DEBUG_CMAKE_ARGS := $(if $(DEBUG),-DCMAKE_STRIP=$(NOOP_STRIP),)
+BUILD_MODE       := $(if $(DEBUG),debug,release)
+BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
+# The FORCE rule below is a real target; defined here (above `all`) it would
+# become the default goal (first non-special target wins). Pin it to `all`.
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+FORCE:
+$(BUILD_MODE_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILD_MODE)" ] || \
+	    { echo "  build mode -> $(BUILD_MODE)"; echo "$(BUILD_MODE)" > $@; }
+
 # ---- compile / link flags ------------------------------------------------
 
 WASI_EMULATED_DEFS := -D_WASI_EMULATED_SIGNAL \
@@ -284,7 +321,7 @@ DPY_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
               -DDUCKDB_WASM=1 \
               -DFSST_MUST_ALIGN \
               $(WASI_EMULATED_DEFS) \
-              -fPIC -O2 \
+              -fPIC -O2 $(DEBUG_CFLAGS) \
               -isystem $(CPYTHON_INCLUDE)
 
 # Final _duckdb module link: the proven import-dynamic pattern from
@@ -536,7 +573,10 @@ EXCEL_DEPS := $(EXCEL_DEPS_PREFIX)/lib/libexpat.a $(EXCEL_DEPS_PREFIX)/lib/libmi
 
 configure: $(CMAKE_BUILD)/CMakeCache.txt
 
-$(CMAKE_BUILD)/CMakeCache.txt: $(BUILD_DIR)/.patched $(INET_SRC)/CMakeLists.txt $(EXCEL_SRC)/CMakeLists.txt $(EXCEL_DEPS) $(HTTPFS_SRC)/.prepared $(CMAKE) $(HOST_PYTHON) | cpython
+# Depends on this Makefile too: the configure flags (build type, strip
+# redirect, debug flags) are defined here, so a change to our build logic
+# must reconfigure even when nothing upstream moved.
+$(CMAKE_BUILD)/CMakeCache.txt: $(BUILD_DIR)/.patched $(INET_SRC)/CMakeLists.txt $(EXCEL_SRC)/CMakeLists.txt $(EXCEL_DEPS) $(HTTPFS_SRC)/.prepared $(CMAKE) $(HOST_PYTHON) $(BUILD_MODE_STAMP) $(THIS_DIR)Makefile | cpython
 	@mkdir -p $(CMAKE_BUILD)
 	@PYBIND11_DIR=$$($(HOST_PYTHON) -m pybind11 --cmakedir); \
 	 echo "  pybind11 cmakedir: $$PYBIND11_DIR"; \
@@ -575,7 +615,14 @@ $(CMAKE_BUILD)/CMakeCache.txt: $(BUILD_DIR)/.patched $(INET_SRC)/CMakeLists.txt 
 	    -DCMAKE_CXX_STANDARD_LIBRARIES='$(DPY_CXX_STANDARD_LIBS)' \
 	    -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
 	    -DCMAKE_C_COMPILER_TARGET=wasm32-wasip2 \
-	    -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip2
+	    -DCMAKE_CXX_COMPILER_TARGET=wasm32-wasip2 \
+	    $(DEBUG_CMAKE_ARGS)
+	@# A reconfigure can change the post-build strip rule (DEBUG toggles
+	@# CMAKE_STRIP) without changing any object, so CMake would consider the
+	@# module up-to-date and never relink/re-run the strip step. Drop the
+	@# stale module so the next `cmake --build` relinks it (link-only — the
+	@# DWARF-bearing objects are cached and not recompiled).
+	@rm -f $(CMAKE_BUILD)/_duckdb*.so
 
 # =============================================================================
 # Stage 4: build the _duckdb module
@@ -589,18 +636,18 @@ $(EMULATED_MMAN_OBJ): $(EMULATED_MMAN_ARCHIVE)
 	mv $(BUILD_DIR)/mman.c.obj $@
 
 # madvise stub object, linked into the module (see DPY_MODULE_LDFLAGS).
-$(MMAN_STUB_OBJ): $(MMAN_STUB_SRC) | $(CMAKE)
+$(MMAN_STUB_OBJ): $(MMAN_STUB_SRC) $(BUILD_MODE_STAMP) | $(CMAKE)
 	@mkdir -p $(BUILD_DIR)
 	@# -D_WASI_EMULATED_MMAN: wasi's <sys/mman.h> #errors without it.
-	$(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -O2 -fPIC -fvisibility=hidden \
+	$(WASI_SDK_PATH)/bin/clang --target=wasm32-wasip2 -O2 $(DEBUG_CFLAGS) -fPIC -fvisibility=hidden \
 	    -D_WASI_EMULATED_MMAN -c $< -o $@
 
 # Strong operator new/delete override (see wasi-operator-new.cpp). Built with
 # exceptions (throwing operator new uses std::bad_alloc) and hidden visibility
 # to match DPY_CFLAGS (keep the whole C++ runtime local, not env-imported).
-$(OPNEW_OBJ): $(OPNEW_SRC) | $(CMAKE)
+$(OPNEW_OBJ): $(OPNEW_SRC) $(BUILD_MODE_STAMP) | $(CMAKE)
 	@mkdir -p $(BUILD_DIR)
-	$(WASI_SDK_PATH)/bin/clang++ --target=wasm32-wasip2 -O2 -fPIC \
+	$(WASI_SDK_PATH)/bin/clang++ --target=wasm32-wasip2 -O2 $(DEBUG_CFLAGS) -fPIC \
 	    -fvisibility=hidden -fvisibility-inlines-hidden -D_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS \
 	    -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false -c $< -o $@
 

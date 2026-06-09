@@ -47,11 +47,35 @@ OUT_DIR    := $(THIS_DIR)out
 WHEEL      := $(OUT_DIR)/cffi-$(CFFI_VERSION)-cp314-abi3-wasi_wasm32.whl
 TARBALL    := $(CACHE_DIR)/cffi-$(CFFI_VERSION).tar.gz
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` adds DWARF (-g) to the compile without lowering
+# optimization (-O2 stays) and never strips, so _cffi_backend.so can be
+# debugged at source level (function names + line tables) in a DWARF-aware
+# wasm engine. The wheel keeps its normal filename, so a DEBUG build
+# OVERWRITES the release wheel in out/ — rebuild without DEBUG before the
+# root `make` collects into dist/.
+DEBUG ?=
+DEBUG_CFLAGS := $(if $(DEBUG),-g,)
+# The .o/.so rules key off source mtime, not flags, so toggling
+# release<->debug would silently no-op. This stamp's mtime changes ONLY
+# when the mode flips; the compile target depends on it to force a rebuild.
+BUILD_MODE       := $(if $(DEBUG),debug,release)
+BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
+# The FORCE rule below is a real target; defined here (above `all`) it would
+# become the default goal (first non-special target wins). Pin it to `all`.
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+FORCE:
+$(BUILD_MODE_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILD_MODE)" ] || \
+	    { echo "  build mode -> $(BUILD_MODE)"; echo "$(BUILD_MODE)" > $@; }
+
 # wasm32-wasip2 + sysroot + the wasm CPython's include dir + our libffi.
 CFLAGS := --target=wasm32-wasip2 \
           --sysroot=$(WASI_SYSROOT) \
           -fPIC -fvisibility=default \
-          -O2 \
+          -O2 $(DEBUG_CFLAGS) \
           -D_WASI_EMULATED_MMAN \
           -isystem $(CPYTHON_INCLUDE) \
           -I$(LIBFFI_INCLUDE) \
@@ -150,7 +174,7 @@ $(SRC_DIR)/.particle-patched: $(SRC_DIR)/setup.py $(THIS_DIR)patches-cffi/file_e
 # directly on _cffi_backend.c. The file #includes a bunch of helper
 # .c via the preprocessor; we just compile one TU.
 
-$(BUILD_DIR)/_cffi_backend.so: $(SRC_DIR)/.particle-patched $(LIBFFI_LIB) | cpython
+$(BUILD_DIR)/_cffi_backend.so: $(SRC_DIR)/.particle-patched $(LIBFFI_LIB) $(BUILD_MODE_STAMP) | cpython
 	@mkdir -p $(BUILD_DIR)
 	$(WASI_SDK_PATH)/bin/clang \
 	  $(CFLAGS) \

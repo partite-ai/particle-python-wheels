@@ -77,6 +77,23 @@ own up-to-date checks. Heavy build trees live under `$HOME/.cache/`
 and `$HOME/cargo-target/` (not the workspace) so they survive
 `make clean` and don't fight with virtiofs.
 
+### Debug builds (`DEBUG=1`)
+
+Build a single wheel with DWARF debug symbols for source-level
+debugging in a DWARF-aware wasm engine (function names, line tables):
+
+```
+make duckdb-python DEBUG=1   # any one component; DEBUG propagates to the subdir
+```
+
+`DEBUG=1` adds `-g` without lowering optimization (`-O2`/`--release`
+stays) and never strips. Toggling `DEBUG` forces the relevant objects to
+recompile (the C/CMake builds key off a build-mode stamp; cargo and meson
+re-trigger on their flag/cross-file change). The debug wheel keeps its
+normal filename, so it **overwrites** the release wheel in the subdir's
+`out/` — rebuild without `DEBUG` before a top-level `make`/`make wheels`
+collects into `dist/`, or that debug wheel will be the one published.
+
 ## Publishing
 
 Push a `v*` tag. [`.github/workflows/release.yml`](./.github/workflows/release.yml)

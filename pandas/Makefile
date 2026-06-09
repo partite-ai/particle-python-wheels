@@ -92,10 +92,35 @@ CXX_WRAP := $(BUILD_DIR)/wasi-cxx
 
 WHEEL := $(OUT_DIR)/pandas-$(PANDAS_VERSION)-cp314-cp314-wasi_wasm32.whl
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` adds DWARF (-g) to the meson compile without lowering
+# optimization and never strips, so the modules can be debugged at source
+# level in a DWARF-aware wasm engine. -g is appended to the cross-file's
+# c_args/cpp_args. The cross-file is regenerated when the mode flips (via the
+# build-mode stamp below), and the existing "cross-file newer than MP_BUILD
+# -> wipe + clean setup" rule (see the wheel target) then forces a clean
+# rebuild that actually picks up -g. The wheel keeps its normal filename, so
+# a DEBUG build OVERWRITES the release wheel in out/ — rebuild without DEBUG
+# before the root `make` collects into dist/.
+COMMA := ,
+DEBUG ?=
+DEBUG_MESON_CARG := $(if $(DEBUG),$(COMMA) '-g',)
+BUILD_MODE       := $(if $(DEBUG),debug,release)
+BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
+# The FORCE rule below is a real target; defined here (above `all`) it would
+# become the default goal (first non-special target wins). Pin it to `all`.
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+FORCE:
+$(BUILD_MODE_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILD_MODE)" ] || \
+	    { echo "  build mode -> $(BUILD_MODE)"; echo "$(BUILD_MODE)" > $@; }
+
 # ---- compile / link flags (embedded into the cross-file) -----------------
 # Mirrors ../numpy: target + -msimd128 (baseline wasm SIMD, no relaxed) +
 # emscripten masquerade + wasi-libc emulation defs + target python include.
-PANDAS_C_ARGS := '--target=wasm32-wasip2', '-msimd128', '-D__EMSCRIPTEN__=1', '-DNPY_NO_SIGNAL', '-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_MMAN', '-D_WASI_EMULATED_PROCESS_CLOCKS', '-D_WASI_EMULATED_GETPID', '-fPIC', '-I$(CPYTHON_INCLUDE)'
+PANDAS_C_ARGS := '--target=wasm32-wasip2', '-msimd128', '-D__EMSCRIPTEN__=1', '-DNPY_NO_SIGNAL', '-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_MMAN', '-D_WASI_EMULATED_PROCESS_CLOCKS', '-D_WASI_EMULATED_GETPID', '-fPIC', '-I$(CPYTHON_INCLUDE)' $(DEBUG_MESON_CARG)
 
 # import-dynamic: Python C API + libc + emulated-* symbols resolved at
 # .so-load by the embedding. Don't link shared libc.so (breaks meson check
@@ -167,7 +192,7 @@ $(BUILD_DIR)/.patched: $(PANDAS_SRC)/pyproject.toml $(PANDAS_PATCHES)
 	touch $@
 
 # Meson cross-file (+ clang wrappers). Identical shape to ../numpy.
-$(CROSSFILE): $(HOST_PYTHON) | $(BUILD_DIR)/.patched
+$(CROSSFILE): $(HOST_PYTHON) $(BUILD_MODE_STAMP) | $(BUILD_DIR)/.patched
 	@mkdir -p $(BUILD_DIR)
 	@printf '%s\n' \
 	  '#!/usr/bin/env bash' \

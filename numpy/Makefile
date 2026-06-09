@@ -96,6 +96,31 @@ CXX_WRAP := $(BUILD_DIR)/wasi-cxx
 
 WHEEL := $(OUT_DIR)/numpy-$(NUMPY_VERSION)-cp314-cp314-wasi_wasm32.whl
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` adds DWARF (-g) to the meson compile without lowering
+# optimization and never strips, so the modules can be debugged at source
+# level in a DWARF-aware wasm engine. -g is appended to the cross-file's
+# c_args/cpp_args. The cross-file is regenerated when the mode flips (via the
+# build-mode stamp below), and the existing "cross-file newer than MP_BUILD
+# -> wipe + clean setup" rule (see the wheel target) then forces a clean
+# rebuild that actually picks up -g. The wheel keeps its normal filename, so
+# a DEBUG build OVERWRITES the release wheel in out/ — rebuild without DEBUG
+# before the root `make` collects into dist/.
+COMMA := ,
+DEBUG ?=
+DEBUG_MESON_CARG := $(if $(DEBUG),$(COMMA) '-g',)
+BUILD_MODE       := $(if $(DEBUG),debug,release)
+BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
+# The FORCE rule below is a real target; defined here (above `all`) it would
+# become the default goal (first non-special target wins). Pin it to `all`.
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+FORCE:
+$(BUILD_MODE_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILD_MODE)" ] || \
+	    { echo "  build mode -> $(BUILD_MODE)"; echo "$(BUILD_MODE)" > $@; }
+
 # ---- compile / link flags (embedded into the cross-file) -----------------
 # c_args: target + the emscripten masquerade + wasi-libc emulation defs +
 # the target python include. NPY_NO_SIGNAL: no signal-based FPE handling.
@@ -110,7 +135,7 @@ WHEEL := $(OUT_DIR)/numpy-$(NUMPY_VERSION)-cp314-cp314-wasi_wasm32.whl
 # now REQUIRES a SIMD128-capable runtime to instantiate; wasm has no
 # in-module runtime dispatch, so it's baked in at compile time. Fine for
 # modern wasip2 engines (wasmtime/wasmer/browsers/Node all support it).
-NUMPY_C_ARGS := '--target=wasm32-wasip2', '-msimd128', '-D__EMSCRIPTEN__=1', '-DNPY_NO_SIGNAL', '-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_MMAN', '-D_WASI_EMULATED_PROCESS_CLOCKS', '-D_WASI_EMULATED_GETPID', '-fPIC', '-I$(CPYTHON_INCLUDE)'
+NUMPY_C_ARGS := '--target=wasm32-wasip2', '-msimd128', '-D__EMSCRIPTEN__=1', '-DNPY_NO_SIGNAL', '-D_WASI_EMULATED_SIGNAL', '-D_WASI_EMULATED_MMAN', '-D_WASI_EMULATED_PROCESS_CLOCKS', '-D_WASI_EMULATED_GETPID', '-fPIC', '-I$(CPYTHON_INCLUDE)' $(DEBUG_MESON_CARG)
 
 # c_link_args: import-dynamic pattern (Python C API + libc + the wasi
 # emulated-* symbols all resolved at .so-load by the embedding's dyld —
@@ -207,7 +232,7 @@ $(BUILD_DIR)/.patched: $(NUMPY_SRC)/pyproject.toml $(NUMPY_PATCHES)
 # -D__EMSCRIPTEN__=1 masquerade so numpy's meson.build takes its emscripten
 # branches. needs_exe_wrapper=true: meson must not try to RUN wasm binaries
 # during configure (it falls back to safe defaults for run-checks).
-$(CROSSFILE): $(HOST_PYTHON) | $(BUILD_DIR)/.patched
+$(CROSSFILE): $(HOST_PYTHON) $(BUILD_MODE_STAMP) | $(BUILD_DIR)/.patched
 	@mkdir -p $(BUILD_DIR)
 	@# Generate the --start-group/--end-group-stripping clang wrappers.
 	@printf '%s\n' \

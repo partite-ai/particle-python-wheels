@@ -35,6 +35,13 @@
 #   make index       # (re)generate ./dist/simple/ from ./dist/*.whl
 #   make <component> # build a single component (e.g. `make cffi`)
 #   make clean       # rm -rf ./dist/ and recurse `clean` into subdirs
+#
+# Debug symbols: append DEBUG=1 to build a single wheel with DWARF (-g,
+# no strip, optimization unchanged) for source-level debugging — e.g.
+# `make duckdb-python DEBUG=1`. The flag propagates to the subdir build
+# (it's a command-line variable). The debug wheel reuses the normal
+# filename, so it OVERWRITES the release wheel in the subdir's out/;
+# rebuild without DEBUG before `make wheels` collects into ./dist/.
 
 THIS_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 

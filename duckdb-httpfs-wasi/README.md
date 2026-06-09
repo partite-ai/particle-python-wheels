@@ -79,6 +79,8 @@ providing host (the repo-wide caveat).
 4. `wasi_http_client.cpp` + the generated `http_client.c` compile + link in;
    the `wasi:http` calls become the 15 Component imports above.
 
-Current scope: read-only `https://`/`http://` (ranged GET + HEAD) — enough to
-`SELECT * FROM 'https://.../data.parquet'` once a host provides `wasi:http`.
-S3 auth and writes are future work (Put/Post/Delete throw today).
+Scope: all five verbs over `https://`/`http://` — ranged GET + HEAD for reads
+(`SELECT * FROM 'https://.../data.parquet'`), plus PUT/POST/DELETE for writes
+and S3-style uploads (request bodies are streamed via wasi:http's
+outgoing-body). Bearer-token auth (`CREATE SECRET (TYPE http, BEARER_TOKEN …)`)
+and `extra_http_headers` are honored. Needs a host that provides `wasi:http`.

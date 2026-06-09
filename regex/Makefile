@@ -38,6 +38,29 @@ OUT_DIR    := $(THIS_DIR)out
 WHEEL   := $(OUT_DIR)/regex-$(REGEX_VERSION)-cp314-cp314-wasi_wasm32.whl
 TARBALL := $(CACHE_DIR)/regex-$(REGEX_VERSION).tar.gz
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` adds DWARF (-g) to the compile without lowering
+# optimization (-O2 stays) and never strips, so _regex.so can be debugged
+# at source level in a DWARF-aware wasm engine. The wheel keeps its normal
+# filename, so a DEBUG build OVERWRITES the release wheel in out/ — rebuild
+# without DEBUG before the root `make` collects into dist/.
+DEBUG ?=
+DEBUG_CFLAGS := $(if $(DEBUG),-g,)
+# The .o rules key off source mtime, not flags, so toggling release<->debug
+# would silently no-op. This stamp's mtime changes ONLY when the mode
+# flips; the compile targets depend on it to force a rebuild.
+BUILD_MODE       := $(if $(DEBUG),debug,release)
+BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
+# The FORCE rule below is a real target; defined here (above `all`) it would
+# become the default goal (first non-special target wins). Pin it to `all`.
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+FORCE:
+$(BUILD_MODE_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILD_MODE)" ] || \
+	    { echo "  build mode -> $(BUILD_MODE)"; echo "$(BUILD_MODE)" > $@; }
+
 # cp314 ext-suffix the host CPython will look for when importing
 # `regex._regex` on wasi.
 EXT_SUFFIX := .cpython-314-wasm32-wasi.so
@@ -45,7 +68,7 @@ EXT_SUFFIX := .cpython-314-wasm32-wasi.so
 CFLAGS := --target=wasm32-wasip2 \
           --sysroot=$(WASI_SYSROOT) \
           -fPIC -fvisibility=default \
-          -O2 \
+          -O2 $(DEBUG_CFLAGS) \
           -isystem $(CPYTHON_INCLUDE) \
           -I$(SRC_DIR)/src
 
@@ -100,11 +123,11 @@ $(SRC_DIR)/setup.py: | $(TARBALL)
 # Two TUs (src/_regex.c, src/_regex_unicode.c). They share headers but
 # don't #include each other — compile separately, then link together.
 
-$(BUILD_DIR)/_regex.o: $(SRC_DIR)/setup.py | cpython
+$(BUILD_DIR)/_regex.o: $(SRC_DIR)/setup.py $(BUILD_MODE_STAMP) | cpython
 	@mkdir -p $(BUILD_DIR)
 	$(WASI_SDK_PATH)/bin/clang $(CFLAGS) -c $(SRC_DIR)/src/_regex.c -o $@
 
-$(BUILD_DIR)/_regex_unicode.o: $(SRC_DIR)/setup.py | cpython
+$(BUILD_DIR)/_regex_unicode.o: $(SRC_DIR)/setup.py $(BUILD_MODE_STAMP) | cpython
 	@mkdir -p $(BUILD_DIR)
 	$(WASI_SDK_PATH)/bin/clang $(CFLAGS) -c $(SRC_DIR)/src/_regex_unicode.c -o $@
 

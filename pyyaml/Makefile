@@ -63,6 +63,30 @@ WHEEL := $(OUT_DIR)/pyyaml-$(PYYAML_VERSION)-cp314-cp314-wasi_wasm32.whl
 
 EXT_SUFFIX := .cpython-314-wasm32-wasi.so
 
+# ---- debug symbols (DEBUG=1) --------------------------------------------
+# `make DEBUG=1` adds DWARF (-g) to the _yaml.c compile without lowering
+# optimization (-O2 stays) and never strips, so _yaml.so can be debugged at
+# source level in a DWARF-aware wasm engine. The wheel keeps its normal
+# filename, so a DEBUG build OVERWRITES the release wheel in out/ — rebuild
+# without DEBUG before the root `make` collects into dist/. (libyaml.a is
+# left at release; only the binding TU carries -g.)
+DEBUG ?=
+DEBUG_CFLAGS := $(if $(DEBUG),-g,)
+# The .so rule keys off source mtime, not flags, so toggling release<->debug
+# would silently no-op. This stamp's mtime changes ONLY when the mode
+# flips; the compile target depends on it to force a rebuild.
+BUILD_MODE       := $(if $(DEBUG),debug,release)
+BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
+# The FORCE rule below is a real target; defined here (above `all`) it would
+# become the default goal (first non-special target wins). Pin it to `all`.
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+FORCE:
+$(BUILD_MODE_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILD_MODE)" ] || \
+	    { echo "  build mode -> $(BUILD_MODE)"; echo "$(BUILD_MODE)" > $@; }
+
 # ---- compile / link flags ------------------------------------------------
 
 LIBYAML_CFLAGS := --target=wasm32-wasip2 --sysroot=$(WASI_SYSROOT) -fPIC -O2
@@ -71,7 +95,7 @@ LIBYAML_CFLAGS := --target=wasm32-wasip2 --sysroot=$(WASI_SYSROOT) -fPIC -O2
 # (libyaml's). Both include paths are needed.
 CFLAGS_PYYAML := --target=wasm32-wasip2 \
                  --sysroot=$(WASI_SYSROOT) \
-                 -fPIC -fvisibility=default -O2 \
+                 -fPIC -fvisibility=default -O2 $(DEBUG_CFLAGS) \
                  -isystem $(CPYTHON_INCLUDE) \
                  -I$(LIBYAML_INCLUDE) \
                  -I$(PYYAML_SRC)/yaml \
@@ -181,7 +205,7 @@ $(BUILD_DIR)/_yaml.c: $(PYYAML_SRC)/setup.py $(CYTHON)
 
 # ---- compile + link _yaml.so ---------------------------------------------
 
-$(BUILD_DIR)/_yaml.so: $(BUILD_DIR)/_yaml.c $(LIBYAML_LIB) | cpython
+$(BUILD_DIR)/_yaml.so: $(BUILD_DIR)/_yaml.c $(LIBYAML_LIB) $(BUILD_MODE_STAMP) | cpython
 	$(WASI_SDK_PATH)/bin/clang $(CFLAGS_PYYAML) -c $(BUILD_DIR)/_yaml.c -o $(BUILD_DIR)/_yaml.o
 	$(WASI_SDK_PATH)/bin/clang $(LDFLAGS) -o $@ \
 	  $(BUILD_DIR)/_yaml.o \

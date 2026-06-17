@@ -60,6 +60,10 @@ DUCKDB_TARBALL_URL := https://github.com/duckdb/duckdb/archive/refs/tags/v$(DUCK
 
 PYBIND11_VERSION := 2.13.6
 CMAKE_VERSION    := 3.30.5
+# binaryen's wasm-opt: post-link `-Oz` size pass on the finished module (stage 4),
+# ~20-25% smaller. It reads the module's target_features section, so no explicit
+# --enable flags are needed, and it preserves dylink.0 + the PyInit/EH machinery.
+BINARYEN_VERSION := 130
 
 # DuckDB extensions statically compiled into the wheel (no runtime
 # download — they're linked into _duckdb.so and registered at startup).
@@ -70,11 +74,15 @@ CMAKE_VERSION    := 3.30.5
 #   core_functions  date/string/math scalar+aggregate funcs (required)   [in-tree]
 #   parquet         read/write parquet                                   [in-tree]
 #   json            json scalar funcs + read_json                        [in-tree]
-#   icu             timezones, collations, Unicode (bundles ICU data)    [in-tree]
 #   inet            INET/IP address types + functions (no network)       [out-of-tree, 0 deps]
 #   excel           read/write xlsx                                       [out-of-tree, +expat/zlib/minizip-ng]
 #   httpfs          remote read over http(s) via wasi:http (NOT curl)     [out-of-tree, patched: see patches-httpfs/]
-BUILD_EXTENSIONS := core_functions;parquet;json;icu;inet;excel;httpfs
+#
+# icu is omitted for size: it's the heaviest extension (much code + the multi-MB
+# icudt66 data blob in DATA), and costs timezone-aware / collation / Unicode-aware
+# ops. To restore it, add `icu` back here — the ICU porting patches
+# (../duckdb/patches-duckdb 0004/0005) apply whether or not it's built.
+BUILD_EXTENSIONS := core_functions;parquet;json;inet;excel;httpfs
 
 # Out-of-tree extension sources. Pinned to the refs in v1.5.3's
 # .github/config/extensions/<name>.cmake. We pre-fetch the GitHub archive
@@ -181,6 +189,8 @@ TOOLCHAIN_BIN := $(TOOLCHAIN_DIR)/bin
 CMAKE         := $(TOOLCHAIN_BIN)/cmake
 HOST_PYVENV   := $(TOOLCHAIN_DIR)/pyvenv
 HOST_PYTHON   := $(HOST_PYVENV)/bin/python
+WASM_OPT      := $(TOOLCHAIN_DIR)/binaryen/bin/wasm-opt
+WASM_METADCE  := $(TOOLCHAIN_DIR)/binaryen/bin/wasm-metadce
 
 # Source trees.
 DPY_SRC      := $(BUILD_DIR)/src/duckdb-python-$(DUCKDB_PYTHON_VERSION)
@@ -231,6 +241,16 @@ endif
 CMAKE_TARBALL_URL := https://github.com/Kitware/CMake/releases/download/v$(CMAKE_VERSION)/cmake-$(CMAKE_VERSION)-$(CMAKE_TARBALL_ARCH).tar.gz
 CMAKE_TARBALL     := $(CACHE_DIR)/cmake-$(CMAKE_VERSION)-$(CMAKE_TARBALL_ARCH).tar.gz
 
+# binaryen release asset arch (note: x86_64-linux / aarch64-linux — the opposite
+# word order from CMake's linux-x86_64).
+ifeq ($(HOST_ARCH),x86_64)
+  BINARYEN_ARCH := x86_64-linux
+else
+  BINARYEN_ARCH := aarch64-linux
+endif
+BINARYEN_TARBALL_URL := https://github.com/WebAssembly/binaryen/releases/download/version_$(BINARYEN_VERSION)/binaryen-version_$(BINARYEN_VERSION)-$(BINARYEN_ARCH).tar.gz
+BINARYEN_TARBALL     := $(CACHE_DIR)/binaryen-version_$(BINARYEN_VERSION)-$(BINARYEN_ARCH).tar.gz
+
 # ---- debug symbols (DEBUG=1) --------------------------------------------
 # `make DEBUG=1` adds DWARF (-g) to every TU (DuckDB core + the pybind11
 # binding + our support objects) without lowering optimization (-O2 stays,
@@ -256,7 +276,41 @@ DEBUG_CFLAGS := $(if $(DEBUG),-g,)
 # nothing and both the DWARF and the full function-name section survive.
 NOOP_STRIP := $(shell command -v true || echo /bin/true)
 DEBUG_CMAKE_ARGS := $(if $(DEBUG),-DCMAKE_STRIP=$(NOOP_STRIP),)
-BUILD_MODE       := $(if $(DEBUG),debug,release)
+
+# ---- link-time optimization (LTO=1 | LTO=full | LTO=thin) ----------------
+# Opt-in, off by default. LTO is the only pass that collapses DuckDB's
+# template-instantiation bloat (wasm-opt runs too late, after the IR is lowered).
+# The link does whole-program codegen and is memory-hungry (a DuckDB-scale link
+# can need many GB; run it on a large machine / CI).
+#   LTO=1 / LTO=full   full LTO  (-flto)        smallest, highest memory
+#   LTO=thin           ThinLTO   (-flto=thin)   most of the win, far less memory
+LTO ?=
+ifeq ($(LTO),thin)
+  LTO_FLAGS := -flto=thin
+else ifneq ($(LTO),)
+  LTO_FLAGS := -flto
+endif
+
+# Wasm exception handling under LTO: codegen runs at link time, but the EH
+# codegen settings are not encoded in the bitcode, so the LTO backend defaults to
+# exception model "none" and silently drops every catch landing pad (thrown
+# exceptions then escape uncaught at runtime). These three flags restore the EH
+# config for the link-time codegen; all three are required. They go through
+# --append-lld-flag because the default wasip2 linker (wasm-component-ld) rejects
+# a bare -Wl,-mllvm,-w... value.
+#   -exception-model=wasm       select the wasm EH model (else EH is dropped)
+#   -wasm-enable-eh             enable wasm EH lowering in the backend
+#   -wasm-use-legacy-eh=false   emit standard EH (try_table), not legacy
+#                               try/catch/rethrow that modern engines reject
+ifneq ($(LTO_FLAGS),)
+  LTO_LINK_FLAGS := -Wl,--append-lld-flag=-mllvm -Wl,--append-lld-flag=-exception-model=wasm \
+                    -Wl,--append-lld-flag=-mllvm -Wl,--append-lld-flag=-wasm-enable-eh \
+                    -Wl,--append-lld-flag=-mllvm -Wl,--append-lld-flag=-wasm-use-legacy-eh=false
+endif
+# Sanity-check an LTO build: `wasm-dis _duckdb.so | grep -c try_table` should be
+# in the tens of thousands (not a few hundred) and `grep -c rethrow` should be 0.
+
+BUILD_MODE       := $(if $(DEBUG),debug,release)$(if $(LTO),+lto.$(LTO),)
 BUILD_MODE_STAMP := $(BUILD_DIR)/.build-mode
 # The FORCE rule below is a real target; defined here (above `all`) it would
 # become the default goal (first non-special target wins). Pin it to `all`.
@@ -321,7 +375,7 @@ DPY_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
               -DDUCKDB_WASM=1 \
               -DFSST_MUST_ALIGN \
               $(WASI_EMULATED_DEFS) \
-              -fPIC -O2 $(DEBUG_CFLAGS) \
+              -fPIC -O2 $(DEBUG_CFLAGS) $(LTO_FLAGS) \
               -isystem $(CPYTHON_INCLUDE)
 
 # Final _duckdb module link: the proven import-dynamic pattern from
@@ -336,7 +390,10 @@ DPY_CFLAGS := -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false \
 # strong definitions land in the module — no env import, no NEEDED.
 # -fwasm-exceptions at link: required so clang drives the wasm-EH-aware link
 # (personality / exception-tag handling) consistently with our eh runtime.
-DPY_MODULE_LDFLAGS := -fwasm-exceptions \
+# $(LTO_FLAGS) at link: with LTO=1 the duckdb TUs are bitcode, so the final link
+# is where the whole-program LTO codegen happens — the flag must be present here
+# too for clang to drive wasm-ld's LTO plugin (this is the memory-heavy step).
+DPY_MODULE_LDFLAGS := -fwasm-exceptions $(LTO_FLAGS) $(LTO_LINK_FLAGS) \
                       -Wl,--no-entry \
                       -Wl,--unresolved-symbols=import-dynamic \
                       -Wl,--allow-undefined \
@@ -389,7 +446,7 @@ cpython:
 # Stage 1: toolchain (host pybind11 venv + cmake)
 # =============================================================================
 
-toolchain: $(CMAKE) $(HOST_PYTHON)
+toolchain: $(CMAKE) $(HOST_PYTHON) $(WASM_OPT)
 
 $(CMAKE_TARBALL): | check-host-deps
 	@mkdir -p $(CACHE_DIR)
@@ -401,6 +458,19 @@ $(CMAKE): | $(CMAKE_TARBALL)
 	tar -xzf $(CMAKE_TARBALL) -C $(TOOLCHAIN_DIR) --strip-components=1
 	@test -x $@ || (echo "cmake tarball didn't ship bin/cmake at $@"; exit 1)
 	@$@ --version | head -1
+
+# binaryen (wasm-opt) — prebuilt release. Extracted under toolchain/binaryen/
+# (the tarball's top dir is binaryen-version_<v>/, stripped to binaryen/).
+$(BINARYEN_TARBALL): | check-host-deps
+	@mkdir -p $(CACHE_DIR)
+	curl -fsSL -o $@.tmp $(BINARYEN_TARBALL_URL)
+	mv $@.tmp $@
+
+$(WASM_OPT): | $(BINARYEN_TARBALL)
+	@mkdir -p $(TOOLCHAIN_DIR)/binaryen
+	tar -xzf $(BINARYEN_TARBALL) -C $(TOOLCHAIN_DIR)/binaryen --strip-components=1
+	@test -x $@ || (echo "binaryen tarball didn't ship bin/wasm-opt at $@"; exit 1)
+	@$@ --version
 
 # Host venv carries pybind11 only — we need its CMake config package
 # (find_package(pybind11 CONFIG)) and its headers, NOT a target python.
@@ -445,6 +515,15 @@ $(BUILD_DIR)/.patched: $(DPY_TARBALL) $(CORE_TARBALL_LOCAL) $(CORE_PATCHES)
 	    echo "  applying core patch $$p"; \
 	    (cd $(CORE_SRC) && patch -p1 --no-backup-if-mismatch < $$p) || exit 1; \
 	done
+	@# A re-extraction means every source file is newer than the existing
+	@# cmake-build, which (a) leaves the configured CMake build system stale and
+	@# (b) makes `cmake --build` trigger an internal reconfigure that runs WITHOUT
+	@# our DUCKDB_<EXT>_DIRECTORY env vars (so extensions get re-fetched unpatched
+	@# and fail, e.g. httpfs -> find_package(OpenSSL)). Wipe cmake-build so the
+	@# next configure is clean (and CMakeCache.txt is created fresh, which also
+	@# lets make see it as new and rebuild the module — otherwise a no-op
+	@# reconfigure leaves the cache mtime unchanged and the build "does nothing").
+	rm -rf $(CMAKE_BUILD)
 	touch $@
 
 # =============================================================================
@@ -659,14 +738,43 @@ $(CXX_EH_PIC_LIBDIR)/libc++abi.a: $(CXX_EH_PIC_BUILD) | $(CMAKE)
 	WASI_SDK_PATH=$(WASI_SDK_PATH) PREFIX=$(CXX_EH_PIC_PREFIX) \
 	CMAKE=$(CMAKE) JOBS=$(JOBS) bash $(CXX_EH_PIC_BUILD)
 
-$(BUILD_DIR)/_duckdb$(EXT_SUFFIX): $(CMAKE_BUILD)/CMakeCache.txt $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ) $(OPNEW_OBJ) $(CXX_EH_PIC_LIBDIR)/libc++abi.a
+# Keep-list for the post-link export prune (see the metadce step below). The
+# -shared link exports every default-visibility symbol; that's ~283 entries,
+# almost all of them third-party vendored API (duckdb_zstd / duckdb_lz4 /
+# duckdb_yyjson, whose ZSTDLIB_VISIBLE / LZ4LIB_API macros force
+# visibility("default") past our -fvisibility=hidden) plus the replaceable
+# operator new/delete. None of that is a public surface — the module only needs
+# to expose PyInit__duckdb (the import hook), _initialize + __wasm_apply_data_relocs
+# (the dyld's reactor-init + relocation entry points) and the __cpp_exception tag.
+WASM_EXPORTS_GRAPH := $(THIS_DIR)wasm-keep-exports.json
+
+$(BUILD_DIR)/_duckdb$(EXT_SUFFIX): $(CMAKE_BUILD)/CMakeCache.txt $(EMULATED_MMAN_OBJ) $(MMAN_STUB_OBJ) $(OPNEW_OBJ) $(CXX_EH_PIC_LIBDIR)/libc++abi.a $(WASM_OPT) $(WASM_EXPORTS_GRAPH)
 	@echo "  building _duckdb with JOBS=$(JOBS) (nproc=$(NPROC), mem=$(MEM_GB)GB)"
 	$(CMAKE) --build $(CMAKE_BUILD) --parallel $(JOBS) --target _duckdb
 	@# Locate the built module (pybind names it _duckdb<EXT_SUFFIX>).
 	@found=$$(find $(CMAKE_BUILD) -name '_duckdb*.so' | head -1); \
 	 test -n "$$found" || { echo "ERROR: _duckdb module not found under $(CMAKE_BUILD)"; exit 1; }; \
 	 cp "$$found" $@; \
-	 printf '✓  _duckdb module: '; ls -lh $@ | awk '{print $$5"  "$$NF}'
+	 printf '✓  _duckdb module (pre-opt): '; ls -lh $@ | awk '{print $$5}'
+	@# Post-link passes (SKIPPED under DEBUG — both discard the DWARF/name info
+	@# that DEBUG=1 exists to keep, and the module isn't stripped then):
+	@#  1. wasm-metadce prunes the export list down to the keep-set in
+	@#     $(WASM_EXPORTS_GRAPH) (PyInit + dyld reactor-init/reloc + the EH tag),
+	@#     dropping ~279 leaked third-party/operator-new exports and dead-code-
+	@#     eliminating anything only those exports kept alive (e.g. zstd/lz4 file
+	@#     helpers duckdb never calls). It preserves dylink.0 + every import.
+	@#  2. wasm-opt -Oz reads the module's target_features section (auto-enabling
+	@#     exception-handling / bulk-memory / reference-types / multivalue / ...)
+	@#     and recompacts (metadce re-emits less densely), reclaiming ~20-25%.
+	@if [ -z "$(DEBUG)" ]; then \
+	   echo "  wasm-metadce (prune exports -> keep-set)"; \
+	   $(WASM_METADCE) $@ --graph-file $(WASM_EXPORTS_GRAPH) -o $@.mdce >/dev/null && mv $@.mdce $@; \
+	   echo "  wasm-opt -Oz (size pass)"; \
+	   $(WASM_OPT) -Oz $@ -o $@.opt && mv $@.opt $@; \
+	   printf '✓  _duckdb module (metadce + wasm-opt -Oz): '; ls -lh $@ | awk '{print $$5"  "$$NF}'; \
+	 else \
+	   echo "  (DEBUG=1: skipping metadce + wasm-opt to preserve DWARF/name section)"; \
+	 fi
 
 # =============================================================================
 # Stage 5: wheel assembly

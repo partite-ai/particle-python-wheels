@@ -1,0 +1,6 @@
+[
+  {"name": "PyInit__duckdb",           "root": true, "export": "PyInit__duckdb"},
+  {"name": "_initialize",              "root": true, "export": "_initialize"},
+  {"name": "__wasm_apply_data_relocs", "root": true, "export": "__wasm_apply_data_relocs"},
+  {"name": "__cpp_exception",          "root": true, "export": "__cpp_exception"}
+]
